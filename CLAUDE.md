@@ -366,19 +366,49 @@ hotel-automation-agent/        ← the repo
 
 ---
 
-## 7. Open decisions (to discuss)
+## 7. Build order (phase 1)
 
-- Backend web framework (the language is decided: Python 3.12 with uv)
-- Frontend framework
-- Models (which model for which step, fallbacks)
-- Reranker and embedding models
-- State shape (exact fields)
-- Hosting and deployment
-- Build order (step-by-step plan)
+Rules: inside out (plain logic → graph → interface); every step ends with something runnable and tested, and is a natural commit point; each open decision is made at the step that first needs it; each branch is tested on its own demo emails as it's built.
+
+| # | Step | What gets built | Decision made here | Demo emails |
+|---|---|---|---|---|
+| 1 | ✅ Setup | Python 3.12 + uv, `backend/` package, Git | | |
+| 2 | ✅ Demo-data decisions | Language, hotel, documents, suppliers, emails, database | | |
+| 3 | ✅ Demo data | 4 documents, 2 invoices, 10 `.eml`, 2 CSVs | | |
+| **4** | **Services + tests** ← **next** | Plain Python: stay price with tax, availability, contract lookup, invoice line checks and totals; `pytest`. No AI, no database (data passed in) | | numbers behind #1–#5 |
+| 5 | Postgres + seed | Postgres in Docker, seed script (CSV → tables, validation), services read from the DB | | |
+| 6 | Document preparation (Part A) | Docling parsing, hybrid chunker, contextual labels, chunks stored with embeddings + full-text index | Embedding model; model for labels | |
+| 7 | Hybrid search | Vector + keyword search, RRF merge, reranker; small retrieval test | Reranker | #6–#8 (search only) |
+| 8 | Graph skeleton + tracing | State, read node (`.eml` + attachments), classify node, code routing, empty branches; Langfuse from here on | State shape; models | all 10 (classification) |
+| 9 | Human approval + checkpointer | `interrupt()` approve / edit / reject, Postgres checkpointer, action node; before the branches so each ends properly | | #9, #10 |
+| 10 | Booking branch | Subgraph: extract → missing info → availability → price → quote or "full" reply | | #3, #4, #5 |
+| 11 | Invoice branch | Subgraph: extract lines → contract lookup → compare → draft | | #1, #2 |
+| 12 | Question branch (the agent) | Agentic RAG: search tool, search again, "not in the documents" | | #6, #7, #8 |
+| 13 | Robustness | Per-node timeouts, error handlers, retry once on bad format → human | | broken-input tests |
+| 14 | Evals | All 10 emails automatically against expected outcomes, score report | | all 10 |
+| 15 | Backend API | List emails, process one, stream steps, approve | Backend web framework | |
+| 16 | Frontend | Three-column inbox, evidence view, "Process whole inbox" | Frontend framework | all 10 |
+| 17 | MCP server | Exposes the services (search, availability, supplier prices) | | |
+| 18 | Deploy + README | Hosting, README, GIF | Hosting | |
+
+Why this order: search (6–7) is tested on its own before the graph, because RAG is the hardest part to debug; approval (9) comes before the branches so each branch is complete when written; Langfuse comes in at 8, as soon as LLM calls exist.
 
 ---
 
-## 8. Decision log
+## 8. Open decisions (to discuss)
+
+Each is made at its step in section 7.
+
+- Embedding model; model for contextual labels (step 6)
+- Reranker (step 7)
+- State shape (exact fields); models: which model for which step, fallbacks (step 8)
+- Backend web framework (step 15; the language is decided: Python 3.12 with uv)
+- Frontend framework (step 16)
+- Hosting and deployment (step 18)
+
+---
+
+## 9. Decision log
 
 - **2026-11-04**: Second portfolio project chosen: email and document automation agent, example client is a fictional hotel. Presented as back-office process automation.
 - **2026-11-04**: Demo uses prepared fake emails in an inbox, a three-column layout, an evidence view of the background steps, and a "Process whole inbox" button.
@@ -409,4 +439,5 @@ hotel-automation-agent/        ← the repo
 - **2026-11-05**: The 10 demo `.eml` files are built and verified in `data/emails/` (section 4).
 - **2026-11-05**: Database: one Postgres + pgvector (Docker) for checkpointer, business tables, vectors and full-text keyword search; hybrid merge with Reciprocal Rank Fusion in code; CSV files in `data/` as source of truth, loaded by a seed script. Separate vector DB rejected (section 6).
 - **2026-11-05**: `data/contracts.csv` and `data/availability.csv` created and checked; all phase 1 demo data is now complete. CSVs stand in for the hotel's systems (price list export, booking-system snapshot) (section 6).
+- **2026-11-05**: Build order agreed (18 steps, steps 1–3 done, next is step 4: services + tests). Open decisions each tied to the step that needs them. New section 7; open decisions and decision log renumbered to 8 and 9.
 - **2026-11-04**: Claude Code keeps this file up to date itself whenever a decision is agreed; Arin writes the code (section 1, rule 9).
