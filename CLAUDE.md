@@ -121,7 +121,7 @@ Data needed: two invoice PDFs (#1, #2); **Dec 30 and Dec 31, 2026 fully booked**
 | 2 | Marco, Summit Linen & Laundry `accounts@summitlinen.example` | Nov 1 | Your invoice SLL-10442 (Oct 19-25) (+ PDF) | all ✓ → internal "OK to pay $1,795.50" note |
 | 3 | Sarah Mitchell | Nov 2 | Room availability December 18-21 | 2 adults + 1 child (8), Dec 18–21 (3 nights): 3 × (2 × $185 + $65) = $1,305 + 10.4% tax $135.72 = **$1,440.72** → quote |
 | 4 | Tom Becker ("Sent from my iPhone", lowercase) | Nov 3 | presidents day weekend | Feb 12–15, 2027, "me my wife and the kids": number of children missing → reply asking how many (and that they're under 13) |
-| 5 | Priya Patel | Nov 3 | New Year's Eve at The Overlook | 2 adults, Dec 30 – Jan 1: fully booked → reply saying no rooms, offering help, no prices invented |
+| 5 | Priya Patel | Nov 3 | New Year's Eve at The Overlook | 2 adults, Dec 30 – Jan 1: fully booked (Dec 30, 31) → reply saying so and suggesting the 3 closest 2-night alternatives found in code: **Dec 28–30, Jan 1–3, Dec 27–29**; no prices invented |
 | 6 | Linda Okafor (an upcoming guest) | Nov 4 | Pool and spa question | pool yes, 7 AM–10 PM, free for guests (guest information); spa facilities free for guests, treatments $35–$350 + 20% service charge (spa list); the $65 day pass is for non-guests → answer citing both documents |
 | 7 | Daniel Reyes | Nov 4 | Kids question for our August trip | son is 10: pool needs an adult (under 14); hedge maze open June–Sept, 9 AM–sunset, free; **no maze age limit in the documents → say so, don't invent one** |
 | 8 | Richard Hale, Hale & Partners | Nov 4 | Transfer from DEN | helicopter from DEN on Jan 9 with price: not in the documents (only driving directions, no shuttle, taxis) → say so and forward to a person, no "no", no invented price |
@@ -146,6 +146,7 @@ To avoid rabbit holes (pets, extra beds, room combinations, special requests):
 - **Availability is a count per night** (rooms in total vs rooms already booked), not individual rooms. Individual rooms come in phase 2, when cancellations need real bookings.
 - If the email is missing information (e.g. number of children), the agent drafts a reply asking for it.
 - If no room is free on one or more of the nights (checked in code), the agent drafts a reply saying so instead of a quote.
+- **Alternative dates (code, not the model):** a service tries stays of the **same length** starting 1 to 7 days earlier or later, closest first (−1, +1, −2, +2 … −7, +7), checks each with `check_availability`, and keeps only `AVAILABLE` ones (a candidate with any full or missing night is simply skipped). At most 3 suggestions; never a start before today (today is passed in). None found → "please contact our reservations team". The LLM only writes the reply from this list, so it can't invent dates.
 
 ### Phase 2 (later)
 
@@ -239,7 +240,7 @@ Note: some features are still beta (LangChain MCP support, some LangGraph stream
 
 - **Matching:** by product code first (an exact lookup in the table, done in code; no search involved); if a line has no code, fall back to the description and mark the line `unclear` with the reason.
 - More than one supplier so that **finding the right contract** for the invoice's supplier is real logic. Mixed units on purpose, to test unit extraction. Phase 2 test idea: an invoice from a supplier with no contract.
-- Stored as `data/contracts.csv`, loaded into a Postgres `contracts` table by the seed script (see "Database" below).
+- Stored as `data/supplier_prices.csv` (named for what it is: agreed prices per supplier and product, not the contract documents), loaded into a Postgres `supplier_prices` table by the seed script (see "Database" below). Checked by `services/invoice_check.py` (dataclass `SupplierPrice`).
 - Human approval is required regardless, so anything the system can't check confidently is shown to the human with its reason.
 
 ### Part A: preparing the documents (runs once, before the demo)
@@ -312,14 +313,14 @@ Index: semantic (embeddings) + keyword
 - **PostgreSQL + pgvector**, run locally as one Docker container (official `pgvector/pgvector` image), started at the first step that needs it. Python talks to it through the `psycopg` driver.
 - One database, four jobs:
   - **LangGraph checkpointer tables** (`checkpoints`, `checkpoint_writes`, `checkpoint_blobs`…): created by `checkpointer.setup()`, written only by LangGraph; one thread per email (`thread_id`). Our code never queries them directly.
-  - **Business tables**: `contracts`, `availability` (rooms booked per night out of 120).
+  - **Business tables**: `supplier_prices`, `availability` (rooms booked per night out of 120).
   - **Document chunks**: a normal table with a `vector` column (pgvector) for semantic search.
   - **Keyword search**: Postgres built-in full-text search on the same chunks.
 - **Hybrid search** = run both searches, merge the two ranked lists in code with Reciprocal Rank Fusion, then rerank. Built-in full-text ranking isn't true BM25; fine for this size, and a BM25 extension can be added later without changing database.
-- **Source of truth is files in `data/`**: `data/contracts.csv` (the 15 rows) and `data/availability.csv` (Dec 30–31 fully booked). A seed script loads them into Postgres, converting types and rejecting bad rows (CSV is all text). Re-skinning = replace the files and re-seed.
-- **What the CSVs stand for:** the hotel's existing systems. `contracts.csv` = a price list kept by hand or exported from accounting; `availability.csv` = a **snapshot** of the booking system (PMS). In production, availability would be read live from the PMS API inside the same `check_availability` service; only that service changes, not the graph. A fixed snapshot is right for the demo because the emails and evals are fixed.
+- **Source of truth is files in `data/`**: `data/supplier_prices.csv` (the 15 rows) and `data/availability.csv` (Dec 30–31 fully booked). A seed script loads them into Postgres, converting types and rejecting bad rows (CSV is all text). Re-skinning = replace the files and re-seed.
+- **What the CSVs stand for:** the hotel's existing systems. `supplier_prices.csv` = a price list kept by hand or exported from accounting; `availability.csv` = a **snapshot** of the booking system (PMS). In production, availability would be read live from the PMS API inside the same `check_availability` service; only that service changes, not the graph. A fixed snapshot is right for the demo because the emails and evals are fixed.
 - **Done (2026-11-05):**
-  - `data/contracts.csv`: 15 rows, columns `supplier,code,product,unit,price`.
+  - `data/supplier_prices.csv` (originally `contracts.csv`): 15 rows, columns `supplier,code,product,unit,price`.
   - `data/availability.csv`: 151 nights, Nov 1, 2026 – Mar 31, 2027, columns `date,rooms_total,rooms_booked`. Realistic pattern (quiet November, busier weekends and holidays, ski season). Only Dec 30 and Dec 31 are full. Checked against the emails: #3 Dec 18–20 free (24/32/41 rooms), #4 Feb 12–14 free, #5 Dec 30–31 full, #9 Dec 5–6 free.
   - Availability rule for the code: free = `rooms_total − rooms_booked`; bookable only if every night has ≥ 1 free room; a night missing from the file means "no data" → human, never "available".
 - Rejected: Postgres + a separate vector database (e.g. Qdrant): two services to run and host, hybrid logic hidden.
@@ -330,6 +331,15 @@ Index: semantic (embeddings) + keyword
 - **Nodes stay short and only coordinate. The real logic lives in `services/`** as plain Python functions.
 - The same service function can be used in three places without copying: called by a **node**, wrapped as a **tool** for the agent, and exposed by the **MCP server**.
 - Services are tested on their own (e.g. "2 adults + 1 child, 3 nights: is the price correct?").
+
+### Code conventions (agreed)
+
+- **Types live next to the function that produces them** (e.g. `StayPrice` in `pricing.py`, `AvailabilityResult` in `availability.py`), not in one big `models.py`. Move a type to a shared module only when a second module needs it (e.g. the graph state in `graph/state.py`, LLM answer formats). `services/__init__.py` may re-export names for shorter imports.
+- **Pydantic at the edges, dataclasses inside.** Data from outside (LLM structured output from step 8, API requests and responses from step 15, config) uses Pydantic models: validation and JSON. Data passed between our own functions uses plain `dataclass`es: already checked at the edge, no silent conversion.
+- **Money is `Decimal`**, created from strings, rounded to cents with `quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)`; never `float`.
+- **Fixed sets of values are `StrEnum`s** (e.g. `AvailabilityStatus`), not loose strings.
+- **`ValueError` for impossible input** (e.g. check-out before check-in); **a status for real-world outcomes** the graph routes on (e.g. `full`, `no_data`).
+- Services receive their data as arguments (no file or database reads inside), so tests build small inputs by hand. Function and variable names in snake_case.
 
 ### Folder structure (confirmed)
 
@@ -357,7 +367,7 @@ hotel-automation-agent/        ← the repo
         prompts/               ← prompts in separate files, not inside the code
     tests/                     ← tests for services; evals later
   frontend/                    ← later: the three-column inbox, its own Node project
-  data/                        ← The Overlook: documents, demo emails, contracts table
+  data/                        ← The Overlook: documents, invoices, demo emails, supplier prices, availability
 ```
 
 - Folders are created only when the step that needs them begins (no empty placeholders).
@@ -440,4 +450,7 @@ Each is made at its step in section 7.
 - **2026-11-05**: Database: one Postgres + pgvector (Docker) for checkpointer, business tables, vectors and full-text keyword search; hybrid merge with Reciprocal Rank Fusion in code; CSV files in `data/` as source of truth, loaded by a seed script. Separate vector DB rejected (section 6).
 - **2026-11-05**: `data/contracts.csv` and `data/availability.csv` created and checked; all phase 1 demo data is now complete. CSVs stand in for the hotel's systems (price list export, booking-system snapshot) (section 6).
 - **2026-11-05**: Build order agreed (18 steps, steps 1–3 done, next is step 4: services + tests). Open decisions each tied to the step that needs them. New section 7; open decisions and decision log renumbered to 8 and 9.
+- **2026-11-06**: Code conventions agreed: types next to the function that produces them; Pydantic at the edges, dataclasses inside; `Decimal` for money; `StrEnum` for fixed values; `ValueError` for impossible input vs a status for real-world outcomes (section 6). Step 4 progress: pricing and availability services done with 12 passing tests.
+- **2026-11-06**: "No availability" replies suggest up to 3 alternative stays of the same length within ±7 days, closest first, found in code by reusing `check_availability`; otherwise "contact reservations". Email #5's expected outcome updated (section 4).
+- **2026-11-06**: `data/contracts.csv` renamed to `data/supplier_prices.csv` (and the future table to `supplier_prices`): it holds agreed prices, not contracts. Invoice line checks go in `services/invoice_check.py`; skeleton created, Arin completes it (section 6).
 - **2026-11-04**: Claude Code keeps this file up to date itself whenever a decision is agreed; Arin writes the code (section 1, rule 9).
