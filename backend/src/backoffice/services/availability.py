@@ -68,3 +68,54 @@ def check_availability(
         full_nights=full_nights,
         missing_nights=missing_nights,
     )
+
+
+@dataclass
+class AlternativeStay:
+    check_in: date
+    check_out: date
+
+
+def find_alternative_stays(
+    check_in: date,
+    check_out: date,
+    nights: dict[date, NightAvailability],
+    today: date,
+    max_shift_days: int = 7,
+    max_suggestions: int = 3,
+) -> list[AlternativeStay]:
+    """
+    Suggest stays of the same length close to the requested one, when it can't be booked.
+
+    Candidates start 1 to `max_shift_days` days earlier or later, closest first
+    (-1, +1, -2, +2, ...). Each one is checked with `check_availability`; only AVAILABLE
+    ones are kept (a candidate with any full or missing night is skipped). Candidates
+    starting before `today` are skipped.
+
+    :param check_in: The requested check-in date
+    :param check_out: The requested check-out date
+    :param nights: Lookup table: date -> that night's availability
+    :param today: The current date (passed in so the function is testable)
+    :param max_shift_days: How far earlier or later a candidate may start
+    :param max_suggestions: Stop after this many suggestions
+    :return: Up to `max_suggestions` alternative stays, closest first; empty if none found
+    """
+    # Validate business rules
+    if check_out <= check_in:
+        raise ValueError("Check-out date must be after check-in date.")
+
+    length = check_out - check_in
+    suggestions: list[AlternativeStay] = []
+
+    for shift in range(1, max_shift_days + 1):
+        for direction in (-1, 1):                     # earlier first, then later
+            start = check_in + timedelta(days=shift * direction)
+            if start < today:
+                continue                              # never suggest the past
+            end = start + length
+            if check_availability(start, end, nights).status == AvailabilityStatus.AVAILABLE:
+                suggestions.append(AlternativeStay(check_in=start, check_out=end))
+                if len(suggestions) == max_suggestions:
+                    return suggestions
+
+    return suggestions
