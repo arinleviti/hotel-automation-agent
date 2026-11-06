@@ -7,6 +7,7 @@ from backoffice.services.invoice_check import (
     LineVerdict,
     SupplierPrice,
     check_invoice_line,
+    check_invoice_totals,
     find_by_code,
     find_by_description,
     normalize_unit,
@@ -145,3 +146,50 @@ def test_unknown_code_falls_back_to_description_and_is_unclear():
 
     assert result.verdict == LineVerdict.UNCLEAR
     assert result.matched.code == "FRP-1034"
+
+
+# --- check_invoice_totals -------------------------------------------------------------
+
+
+def totals_lines(*amounts: str) -> list[InvoiceLine]:
+    """Helper: invoice lines where only the line totals matter for the totals check."""
+    return [line(None, "item", "1", "piece", a, a) for a in amounts]
+
+
+FRP_LINES = totals_lines("138.00", "82.00", "46.50", "48.00", "190.00")      # = 504.50
+SLL_LINES = totals_lines("528.00", "336.00", "468.00", "216.00", "247.50")   # = 1795.50
+
+
+def test_email_1_totals_add_up():
+    result = check_invoice_totals(FRP_LINES, Decimal("504.50"), Decimal("0.00"), Decimal("504.50"))
+
+    assert result.verdict == LineVerdict.OK
+    assert result.difference == Decimal("0.00")
+
+
+def test_email_2_totals_add_up_without_a_tax_line():
+    result = check_invoice_totals(SLL_LINES, Decimal("1795.50"), None, Decimal("1795.50"))
+
+    assert result.verdict == LineVerdict.OK
+
+
+def test_subtotal_not_matching_the_lines_is_mismatch():
+    result = check_invoice_totals(FRP_LINES, Decimal("514.50"), Decimal("0.00"), Decimal("514.50"))
+
+    assert result.verdict == LineVerdict.MISMATCH
+    assert result.difference == Decimal("10.00")
+    assert "subtotal" in result.reason
+
+
+def test_total_not_matching_subtotal_plus_tax_is_mismatch():
+    result = check_invoice_totals(FRP_LINES, Decimal("504.50"), Decimal("0.00"), Decimal("505.50"))
+
+    assert result.verdict == LineVerdict.MISMATCH
+    assert result.difference == Decimal("1.00")
+    assert "total" in result.reason
+
+
+def test_tax_is_added_to_the_subtotal():
+    result = check_invoice_totals(FRP_LINES, Decimal("504.50"), Decimal("41.37"), Decimal("545.87"))
+
+    assert result.verdict == LineVerdict.OK

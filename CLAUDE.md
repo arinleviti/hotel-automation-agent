@@ -1,27 +1,27 @@
 # Project: Hotel Email & Document Automation Agent
 
 > Working document. Updated in conversation every time a decision is agreed.
-> Last updated: 2026-11-05
+> Last updated: 2026-11-06
 
 ---
 
 ## 1. Working rules for Claude Code (read first, always follow)
 
-I (Arin) am building this project **myself, to learn**. Claude Code is my tutor and reviewer, not the builder.
+I (Arin) own this project and its design. I'm job hunting and interviews focus on **architecture**, so my time goes into understanding and deciding the design; **Claude Code writes the code** (changed 2026-11-06; until then I wrote it myself).
 
-1. **Never write or change code without my explicit approval.** No file edits, no new files, no refactors, no "quick fixes" unless I say so clearly (e.g. "ok, you do it", "go ahead and write it").
-2. **When I approve, do only what I approved.** If you notice something else that should change, tell me and wait.
-3. **Default mode is teaching:**
-   - Explain what the next step is and why, in plain, simple language with a concrete example.
-   - Tell me what to write and where, and let me write it.
-   - When I've written something, review it: what works, what's wrong, what to improve, and why.
-   - If I'm stuck, give me a hint first. Give the full solution only if I ask.
-4. **Ask before running any command that changes something**: installing packages, creating or deleting files or folders, database migrations, git commits. Read-only commands (reading files, listing folders, running tests) are fine.
+1. **Agree the design before writing code.** Explain what the next piece does, why, and how it fits the architecture; once I agree, write it. Don't ask whether I want to write it myself.
+2. **Do only what was agreed.** If you notice something else that should change, tell me and wait.
+3. **Explain everything you write so I can defend it in an interview:**
+   - What each function/module does, its inputs and outputs, and why it's designed that way (trade-offs, alternatives rejected).
+   - A concrete example from the demo data.
+   - Keep my names and style when editing code I wrote; only change what's needed, and say why.
+   - Write tests for what you build, and run them.
+4. **Ask before running any command with lasting side effects outside the code**: installing packages, deleting files or folders, database migrations, git commits. Creating and editing code and test files for an agreed piece is fine. Read-only commands (reading files, listing folders, running tests) are fine.
 5. **Never push to GitHub.** I do that myself.
 6. **One step at a time.** Don't jump ahead to later steps or plan several steps of code at once unless I ask.
 7. **When I ask you to write a file, give me the complete file**, never partial snippets.
 8. **Check this file before suggesting anything.** If a suggestion conflicts with a decision recorded here, point it out instead of silently changing direction.
-9. **You keep this file up to date, not me.** When a decision is agreed, update the relevant section, the open decisions and the decision log yourself, then tell me what you changed. (Rule 1 is about code; this file is the exception.)
+9. **You keep this file up to date, not me.** When a decision is agreed, update the relevant section, the open decisions and the decision log yourself, then tell me what you changed.
 
 ---
 
@@ -385,8 +385,8 @@ Rules: inside out (plain logic → graph → interface); every step ends with so
 | 1 | ✅ Setup | Python 3.12 + uv, `backend/` package, Git | | |
 | 2 | ✅ Demo-data decisions | Language, hotel, documents, suppliers, emails, database | | |
 | 3 | ✅ Demo data | 4 documents, 2 invoices, 10 `.eml`, 2 CSVs | | |
-| **4** | **Services + tests** ← **next** | Plain Python: stay price with tax, availability, contract lookup, invoice line checks and totals; `pytest`. No AI, no database (data passed in) | | numbers behind #1–#5 |
-| 5 | Postgres + seed | Postgres in Docker, seed script (CSV → tables, validation), services read from the DB | | |
+| 4 | ✅ Services + tests | `services/pricing.py` (stay price with tax), `services/availability.py` (availability + alternative stays), `services/invoice_check.py` (unit normalisation, lookup by code / description, line check, totals check); 45 `pytest` tests. No AI, no database (data passed in) | | numbers behind #1–#5 |
+| **5** | **Postgres + seed** ← **next** | Postgres in Docker, seed script (CSV → tables, validation), services read from the DB | | |
 | 6 | Document preparation (Part A) | Docling parsing, hybrid chunker, contextual labels, chunks stored with embeddings + full-text index | Embedding model; model for labels | |
 | 7 | Hybrid search | Vector + keyword search, RRF merge, reranker; small retrieval test | Reranker | #6–#8 (search only) |
 | 8 | Graph skeleton + tracing | State, read node (`.eml` + attachments), classify node, code routing, empty branches; Langfuse from here on | State shape; models | all 10 (classification) |
@@ -453,4 +453,6 @@ Each is made at its step in section 7.
 - **2026-11-06**: Code conventions agreed: types next to the function that produces them; Pydantic at the edges, dataclasses inside; `Decimal` for money; `StrEnum` for fixed values; `ValueError` for impossible input vs a status for real-world outcomes (section 6). Step 4 progress: pricing and availability services done with 12 passing tests.
 - **2026-11-06**: "No availability" replies suggest up to 3 alternative stays of the same length within ±7 days, closest first, found in code by reusing `check_availability`; otherwise "contact reservations". Email #5's expected outcome updated (section 4).
 - **2026-11-06**: `data/contracts.csv` renamed to `data/supplier_prices.csv` (and the future table to `supplier_prices`): it holds agreed prices, not contracts. Invoice line checks go in `services/invoice_check.py`; skeleton created, Arin completes it (section 6).
+- **2026-11-06**: Working mode changed: Arin focuses on architecture and design decisions (job hunting, interviews are architecture-heavy); Claude Code writes the code after the design is agreed, explains it at interview level, and writes and runs the tests (section 1).
+- **2026-11-06**: Step 4 done: pricing, availability (with alternative stays) and invoice checks (lines + totals) in `services/`, 45 passing tests. Next: step 5, Postgres + seed (section 7).
 - **2026-11-04**: Claude Code keeps this file up to date itself whenever a decision is agreed; Arin writes the code (section 1, rule 9).

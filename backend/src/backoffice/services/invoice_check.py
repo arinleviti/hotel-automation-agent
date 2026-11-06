@@ -194,3 +194,51 @@ def check_invoice_line(supplier: str, line: InvoiceLine, prices: list[SupplierPr
         overcharge= Decimal("0.00"),
     )
 
+
+@dataclass
+class TotalsCheck:
+    verdict: LineVerdict      # reuse it: OK or MISMATCH
+    reason: str
+    difference: Decimal = Decimal("0.00")   # printed amount - calculated amount, 0 if it adds up
+
+
+def check_invoice_totals(
+    lines: list[InvoiceLine],
+    subtotal: Decimal,
+    tax: Decimal | None,      # None when the invoice has no tax line
+    total: Decimal,
+) -> TotalsCheck:
+    """
+    Check the invoice's own arithmetic at the bottom of the page.
+
+      1. The line totals must add up to the printed subtotal.
+      2. Subtotal + tax must equal the printed total (no tax line = tax 0).
+
+    Only the arithmetic is checked, not whether the tax itself is right (e.g. "exempt").
+
+    Expected on the demo invoices:
+      FRP-INV-2026-1184: lines 504.50, subtotal 504.50, tax 0.00, total 504.50 -> OK
+      SLL-10442: lines 1795.50, subtotal 1795.50, no tax line, total 1795.50 -> OK
+    """
+    cents = Decimal("0.01")
+
+    # Check 1: lines -> subtotal
+    lines_sum = sum((l.line_total for l in lines), Decimal("0")).quantize(cents, rounding=ROUND_HALF_UP)
+    if lines_sum != subtotal:
+        return TotalsCheck(
+            verdict=LineVerdict.MISMATCH,
+            reason=f"Lines add up to {lines_sum}, but the invoice subtotal is {subtotal}",
+            difference=(subtotal - lines_sum).quantize(cents, rounding=ROUND_HALF_UP),
+        )
+
+    # Check 2: subtotal + tax -> total
+    expected_total = (subtotal + (tax or Decimal("0"))).quantize(cents, rounding=ROUND_HALF_UP)
+    if expected_total != total:
+        return TotalsCheck(
+            verdict=LineVerdict.MISMATCH,
+            reason=f"Subtotal {subtotal} + tax {tax or Decimal('0.00')} = {expected_total}, "
+                   f"but the invoice total is {total}",
+            difference=(total - expected_total).quantize(cents, rounding=ROUND_HALF_UP),
+        )
+
+    return TotalsCheck(verdict=LineVerdict.OK, reason="Lines, subtotal, tax and total add up")
