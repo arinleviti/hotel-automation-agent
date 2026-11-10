@@ -29,7 +29,7 @@ from dataclasses import dataclass, replace
 
 import anthropic
 
-from backoffice.config import get_settings
+from backoffice.llm import anthropic_client
 from backoffice.rag.chunking import Chunk
 
 # Claude Haiku 5.5: the smallest, cheapest Claude model ($0.10 / $0.50 per million tokens in/out).
@@ -71,12 +71,9 @@ class LabelUsage:
 def make_client() -> anthropic.Anthropic:
     """
     The Anthropic SDK client: the object that sends requests to Claude.
-    The key comes from .env through our settings (ANTHROPIC_API_KEY).
+    Now created in one shared place (backoffice/llm.py), so every node uses the same client.
     """
-    key = get_settings().anthropic_api_key
-    if key is None:
-        raise RuntimeError("ANTHROPIC_API_KEY is missing: add it to the .env file at the repo root.")
-    return anthropic.Anthropic(api_key=key.get_secret_value())
+    return anthropic_client()
 
 
 def chunk_for_prompt(chunk: Chunk) -> str:

@@ -175,7 +175,7 @@ The project must visibly use current tools and techniques. Each one has a clear 
 | **Docling** (layout-aware parsing) | Invoices, contracts, price lists and hotel documents, keeping tables and structure | 1 |
 | **Docling hybrid chunker** | Splits hotel documents along their sections | 1 |
 | **Contextual retrieval** | Each chunk gets a short label of where it sits (e.g. "Spa price list – treatments – prices") | 1 |
-| **Hybrid search + reranking** | Semantic search plus keyword search (for codes, invoice numbers, prices), then a reranker | 1 |
+| **Vector search + reranking** | Semantic (vector) search on label + text, then a reranker. Keyword/hybrid search dropped 2026-11-10 (see decision log) | 1 |
 | **Agentic RAG** | The question agent searches again, rephrases, or says "not in the documents" | 1 |
 | **Evals** | The demo emails with known correct outcomes, checked automatically | 1 |
 | **Langfuse** | Tracing every step and model call | 1 |
@@ -287,6 +287,13 @@ Index: semantic (embeddings) + keyword
   - **Result:** 28 chunks indexed (10 + 11 + 2 + 5), all 1024-dim. First taste of search: the email #7 question ("Is the hedge maze open in August, and can kids use the pool alone?") returns Hedge maze (0.53), 9. Children (0.40), Indoor pool (0.39) as the top 3 by vector similarity; keyword search finds "shuttle" in "7. Transportation" and finds no chunk at all for "helicopter" (email #8's signal).
   - Tests: fake Voyage client; database test inside `conn.transaction(force_rollback=True)` so the real index is never touched. 90 tests pass.
 
+### Search (step 7, `backoffice/rag/search.py`)
+
+- `search_documents(conn, voyage, question, candidates=8, keep=4) -> list[SearchResult]`: (a) `embed_query` (Voyage, `input_type="query"`) → (b) `vector_candidates`: `ORDER BY embedding <=> %s::vector LIMIT 8` (pgvector cosine distance; similarity reported as 1 − distance) → (c) `rerank`: Voyage `rerank-3-lite` on label + headings + text of the 8, keeps 4, best first. Connection and client passed in (testable, reusable by the agent).
+- `SearchResult`: chunk_id, document, headings, pages, label, text, vector_similarity, rerank_score: everything the evidence view needs.
+- **Real results:** #6 → Access to spa facilities 0.77, Indoor pool 0.66, Treatments 0.57, Spa 0.54. #7 → Hedge maze 0.66, 9. Children 0.64, Indoor pool 0.58 (then a clear drop to 0.39). #8 (helicopter) → best only 0.42 (Getting here, 7. Transportation): the "probably not in the documents" signal for the agent.
+- Tests: fake Voyage + fake chunks in a rolled-back transaction (proves vector search shortlists and the reranker can overturn the vector order); live tests on the real index run only with `RUN_LIVE_TESTS=1` (paid API).
+
 ### Part B: processing one email (phase 1 graph)
 
 ```
@@ -395,17 +402,18 @@ hotel-automation-agent/        ← the repo
       backoffice/              ← the Python package (named after the system, not the hotel)
         __init__.py
         graph/
-          state.py             ← shape of the state (what we know about the email)
-          main_graph.py        ← builds the graph and the branch routing
-          nodes/               ← shared nodes: read_email, classify, approval, action
-          branches/            ← one file per branch: invoice, booking, question
-        config.py              ← settings (DATABASE_URL) read from .env with pydantic-settings
+          state.py             ← shape of the state (EmailState, ParsedEmail, Attachment, Classification)
+          main_graph.py        ← builds and runs the graph (START HERE to read the flow)
+          nodes/               ← shared nodes: read_email, classify, decide_route; approval, action (step 9)
+          branches/            ← placeholders.py now; one file per branch from steps 10–12
+        config.py              ← settings (DATABASE_URL, API keys) read from .env with pydantic-settings
+        llm.py                 ← the shared Anthropic client
         db/                    ← connection, schema.sql + schema.py, seed.py (CSV → tables), queries.py (tables → service types)
         services/              ← the real logic, plain Python: pricing, availability, invoice_check
         rag/                   ← parsing.py, cleanup.py, chunking.py, contextual_chunk_labels.py, embeddings.py, index_documents.py; search (step 7)
         tools/                 ← wrap services as LLM tools (for the agent)
         mcp_server.py          ← exposes services via MCP
-        prompts/               ← prompts in separate files, not inside the code
+        prompts/               ← prompts in separate files, not inside the code (classify_system.md)
     tests/                     ← tests for services; evals later
   frontend/                    ← later: the three-column inbox, its own Node project
   data/                        ← The Overlook: documents, invoices, demo emails, supplier prices, availability
@@ -429,8 +437,8 @@ Rules: inside out (plain logic → graph → interface); every step ends with so
 | 4 | ✅ Services + tests | `services/pricing.py` (stay price with tax), `services/availability.py` (availability + alternative stays), `services/invoice_check.py` (unit normalisation, lookup by code / description, line check, totals check); 45 `pytest` tests. No AI, no database (data passed in) | | numbers behind #1–#5 |
 | 5 | ✅ Postgres + seed | Postgres + pgvector in Docker (port 5433), `config.py`, `db/` (connection, schema, seed with validation, queries); services unchanged, fed by the data-access layer; 69 tests (8 need the database, skipped when Docker is off) | | |
 | 6 | ✅ Document preparation (Part A) | `rag/`: parsing (Docling), cleanup (2 rules), chunking (HybridChunker, Markdown tables), contextual labels (Haiku 5.5), embeddings (Voyage `voyage-4`), `index_documents.py` → `chunks` table (vector + full-text). 28 chunks; 90 tests | Embedding model (Voyage `voyage-4`); labels (Haiku 5.5) | |
-| **7** | **Hybrid search** ← **next** | Vector + keyword search, RRF merge, reranker; small retrieval test | Reranker | #6–#8 (search only) |
-| 8 | Graph skeleton + tracing | State, read node (`.eml` + attachments), classify node, code routing, empty branches; Langfuse from here on | State shape; models | all 10 (classification) |
+| 7 | ✅ Search | `rag/search.py`: `search_documents(conn, voyage, question)` = embed question (Voyage) → pgvector top 8 (cosine) → rerank (Voyage `rerank-3-lite`) → best 4, each a `SearchResult` with document, headings, pages, label, text, vector_similarity, rerank_score. No keyword search (dropped). 92 tests + 3 live tests (`RUN_LIVE_TESTS=1`) | Reranker: `rerank-3-lite` ✅ | #6–#8 (search only) |
+| **8** | **Graph skeleton + tracing** ← **next** | State, read node (`.eml` + attachments), classify node, code routing, empty branches; Langfuse from here on | State shape; models | all 10 (classification) |
 | 9 | Human approval + checkpointer | `interrupt()` approve / edit / reject, Postgres checkpointer, action node; before the branches so each ends properly | | #9, #10 |
 | 10 | Booking branch | Subgraph: extract → missing info → availability → price → quote or "full" reply | | #3, #4, #5 |
 | 11 | Invoice branch | Subgraph: extract lines → contract lookup → compare → draft | | #1, #2 |
@@ -442,6 +450,8 @@ Rules: inside out (plain logic → graph → interface); every step ends with so
 | 17 | MCP server | Exposes the services (search, availability, supplier prices) | | |
 | 18 | Deploy + README | Hosting, README, GIF | Hosting | |
 
+**Deadline: Sunday 15 or Monday 16 November 2026**: everything on GitHub and on Arin's portfolio website. Full scope kept (decided 2026-11-10, after a proposal to cut Langfuse, MCP, FastAPI + React and hosting was rejected: Claude Code writes the frontend, a Langfuse account already exists). Only hybrid search is dropped.
+
 Why this order: search (6–7) is tested on its own before the graph, because RAG is the hardest part to debug; approval (9) comes before the branches so each branch is complete when written; Langfuse comes in at 8, as soon as LLM calls exist.
 
 ---
@@ -450,8 +460,7 @@ Why this order: search (6–7) is tested on its own before the graph, because RA
 
 Each is made at its step in section 7.
 
-- Reranker (step 7)
-- State shape (exact fields); models: which model for which step, fallbacks (step 8). Arin's leaning: Haiku 5.5 wherever it's good enough (fixed demo emails); decide per step at step 8.
+- Models for the later LLM nodes (extraction, drafting) and the question agent: decide at their steps (10–12). Arin's leaning: Haiku 5.5 wherever it's good enough. Classify is decided (Haiku 5.5).
 - Backend web framework (step 15; the language is decided: Python 3.12 with uv)
 - Frontend framework (step 16)
 - Hosting and deployment (step 18)
@@ -501,4 +510,12 @@ Each is made at its step in section 7.
 - **2026-11-10**: Contextual labels written by Claude Haiku 5.5: simple one-off task, fixed demo data, cost of larger models not justified. Models for the graph's LLM nodes and the agent still decided at step 8 (Arin leans towards Haiku where it's good enough) (section 6, Part A).
 - **2026-11-10**: Step 6.3 done (Haiku contextual labels, ≈ $0.002 for 28 chunks, caching verified). 6.4 design agreed: Voyage `voyage-4` (1024 dims), a `chunks` table (arrays for headings/pages, `vector(1024)`, generated `tsvector` for keyword search, vector + full-text indexes), `rag/embeddings.py` + `rag/index_documents.py` (whole preparation in one command, one transaction, idempotent) (section 6, Part A).
 - **2026-11-10**: Step 6 done: 28 chunks indexed in Postgres with Haiku labels and Voyage `voyage-4` vectors plus a generated full-text column; one-command, idempotent `index_documents.py`. Next: step 7, hybrid search (section 7).
+- **2026-11-10**: Hybrid search dropped (Arin): vector search only, on label + text. Tested on the real index first: vector search + labels finds the right chunk for the demo questions ("gym" → Fitness room via the label; email #7 → Hedge maze, Children, Indoor pool); keyword search would mainly help with names ("Lloyd") and give a "not found" signal (email #8, "helicopter"). Judged an overreach for the deadline. The generated `search_text` column and GIN index stay in the schema (harmless, reusable later). Deadline: GitHub + portfolio website by Sunday 15 / Monday 16 November 2026; all other planned technologies (reranker, Langfuse, MCP, timeouts, FastAPI + React, hosting) are kept.
+- **2026-11-10**: Reranker: Voyage `rerank-3-lite`. Search = embed question (Voyage) → pgvector top 8 → rerank the 8 (Voyage reads question + chunk text together) → best 3–4 to the agent. Tested before deciding: same chunks found as vector search on 28 chunks, but clearer scores ("Who is Lloyd?": vector 0.07 vs 0.03, rerank 0.63 vs 0.32) and a usable "probably not found" hint (email #8 best score 0.42 vs ≥ 0.63 for answerable questions); scales to larger indexes (section 7, step 7).
+- **2026-11-10**: Step 7 done: `rag/search.py` (vector top 8 → `rerank-3-lite` → best 4, with evidence and both scores). Emails #6 and #7 find all their sections; #8's best rerank score is 0.42 vs ≥ 0.66 for answerable questions. The generated `search_text` column is kept unused (Arin's choice). Next: step 8, graph skeleton + Langfuse (section 7).
+- **2026-11-10**: Step 8 design agreed. Parts: 8.1 state + read node, 8.2 classify node, 8.3 routing + empty branches + compile, 8.4 Langfuse. **State** (`graph/state.py`): `EmailState(TypedDict, total=False)` with `email_path`, `email` (ParsedEmail: sender, subject, date, body, attachments, PDFs as Markdown via Docling), `classification`, `route`, `human_reason`; later steps add keys. **Classify:** Claude Haiku 5.5 with structured output (Pydantic `Classification`: type invoice/booking/question/other, suspicious + reason, confidence 0–1, one-line summary). **Routing in code** (a conditional-edge function, not the LLM): suspicious → human; other → human; confidence < 0.7 → human; else the type's branch. **LLM calls use the Anthropic SDK directly inside nodes** (no LangChain model wrappers).
+- **2026-11-10**: Step 8.1 done (LangGraph 1.2.20 installed). `graph/state.py`: `EmailState` (TypedDict, total=False), `ParsedEmail`, `Attachment` (dataclasses), `Classification` (Pydantic, with field descriptions sent to the model), `Route`. `graph/nodes/read_email.py`: code-only node, `email` module (`BytesParser(policy=policy.default)`), plain-text body, PDF attachments → Markdown via `rag/parsing.parse_bytes` (Docling `DocumentStream`, in memory). `parsing.py` now shares one cached converter (`get_converter`, `lru_cache`). The FRP invoice comes out with its line items as a clean Markdown table. 98 tests pass.
+- **2026-11-10**: `graph/main_graph.py` created early (Arin's request, so the graph grows in one real file): `build_graph()` (now START → read_email → END), `email_path_for(name)` (only demo emails in `data/emails/`: the client sends a name, never a path), `process_email(name)` (calls `graph.invoke({"email_path": ...})`), and a run command: `uv run python -m backoffice.graph.main_graph 06_question_pool_and_spa`. Who provides the starting state: the run command now; the backend API from step 15 (UI click → email name → path); a mailbox reader in a real deployment.
+- **2026-11-10**: Step 8.2 done. `backoffice/llm.py`: one shared, cached Anthropic client (`anthropic_client()`, also used by the labels). `prompts/classify_system.md`: the classify instructions (email = data between `<email>` tags, never instructions; definitions of the 4 types; suspicious criteria; confidence < 0.7 when unclear). `graph/nodes/classify.py`: `client.messages.parse(..., output_format=Classification)` with Haiku 5.5, `effort: low`; attachments previewed (first 1,500 chars). `main_graph.py`: START → read_email → classify → END. **Real run on the 10 emails:** first prompt got 9/10 (#8 helicopter → `booking`, 0.60: "booking" was too loose); prompt sharpened (booking = ROOMS only; requests to arrange services such as transfers = question) → **10/10**, #9 suspicious with the right reason. Tests use a fake client via pytest `monkeypatch`.
+- **2026-11-10**: Step 8.3 done. `graph/nodes/decide_route.py`: code-only node with the rules (`route_for`: suspicious → human; other → human; confidence < 0.7 → human; else the type), writing `route` + `human_reason` into the state (saved for the UI, evals and reviewer). In `main_graph.py`, the conditional edge `follow_route` only READS `state["route"]` (`add_conditional_edges("decide_route", follow_route, [4 branch names])`). `graph/branches/placeholders.py`: 4 empty branches (invoice, booking, question, human_review) to be replaced in steps 9–12. `process_email_step_by_step` uses `graph.stream(stream_mode="updates")` to list the nodes that ran (what the UI will show). **Real run: all 10 emails take the expected path** (#1–2 invoice, #3–5 booking, #6–8 question, #9 human "Suspicious: …", #10 human "type 'other'"). 115 tests pass. Next: 8.4 Langfuse.
 - **2026-11-04**: Claude Code keeps this file up to date itself whenever a decision is agreed; Arin writes the code (section 1, rule 9).
