@@ -260,6 +260,33 @@ Contextual retrieval: each chunk gets a label
 Index: semantic (embeddings) + keyword
 ```
 
+- **Embeddings: Voyage AI, model `voyage-4`** (1024 dimensions; $0.06 per 1M tokens, 200M free tokens for new accounts; the balanced option between `voyage-4-large` and `voyage-4-lite`, all three compatible; decided 2026-11-10). `input_type="document"` for chunks, `"query"` for questions. API; Anthropic's recommended embedding provider. Called in two moments only: (1) **preparation**, once per run, to embed every chunk (re-run only when a document changes); (2) **each search** (step 7 onward), to embed the question, one small call, so it can be compared with the stored chunk vectors. Documents are never re-embedded per question. Chosen over a local open-source model to keep the backend light for hosting; Voyage also offers rerankers (candidate for step 7).
+- **Parsing (6.1, `backoffice/rag/parsing.py`)**: one Docling `DocumentConverter` for all files (`parse_documents`). First run ~5 min (downloads layout/table models), later runs seconds. What Docling made of the messy documents:
+  - ✓ Page headers/footers recognised as "furniture" and kept out of the body (won't pollute chunks).
+  - ✓ In PDFs, bold-text headings ("Getting here", "The Gold Room", "Hedge maze") are detected as headings, like real ones.
+  - ⚠ PDFs lose heading **levels**: every heading is level 1 ("Indoor pool" is not nested under "Facilities").
+  - ⚠ In the Word file, the hand-numbered bold sections ("1. Smoking" … "9. Children") are plain text, not headings; only "5. Cancellation policy" (a real Heading 1) and "Fees at a glance" are headings. Sections 6–9 therefore sit under "5. Cancellation policy" structurally.
+  - ⚠ The spa table that continues onto page 2 comes out as **two tables**; the second has no column headers (its first row, "BODY TREATMENTS", acts as header).
+  - Word files have no pages: chunks from the `.docx` can cite their section, not a page number.
+  - These are exactly the realistic problems the documents were built to have; how far to fix them in code is decided in 6.2, after seeing the chunks. Contextual labels (below) are the main answer to missing structure.
+- **Chunking (6.2, `backoffice/rag/chunking.py`)**: Docling `HybridChunker`, 256-token limit (tokenizer `sentence-transformers/all-MiniLM-L6-v2`, used only to measure length), `merge_peers=True`. Output converted to our own `Chunk` dataclass (document, index, headings, text, pages): the adapter pattern, so only this file depends on Docling. First run: 21 chunks. Findings: guest information perfect (one chunk per section, so the flattened heading levels don't matter → LLM heading-level fix skipped); house rules mixed (sections 6–9 inside "Cancellation policy"); spa table chunks broken (second table with anonymous "1 =" / "2 =" columns; a row cut mid-way, orphaning "$135").
+- **Cleanup before chunking (`backoffice/rag/cleanup.py`)**, rules that change structure only, never text:
+  - **Fix 1 (done):** `promote_numbered_headings`: a plain paragraph that is bold, under 60 characters and starts with "N. " becomes a level-1 heading. House rules: 8 headings promoted, 3 mixed chunks → 11 clean ones ("7. Transportation" is its own chunk). Known side-effect: the "Fees at a glance" table (a real level-2 heading) now sits under "9. Children"; left for the contextual labels to describe correctly.
+    - **Limitation (kept on purpose, decided 2026-11-10):** the rule encodes one way of faking headings (bold + numbered). It misses unbolded/unnumbered headings and can misfire on bold numbered lines that aren't headings. Fine for the demo (fixed documents, deterministic, tested). **Production alternatives, for the README/interviews:** (a) Arin's more general rule: a standalone item that is short (≤ ~6 words), doesn't end with a full stop, and is followed by a longer paragraph; (b) an LLM structure pass: the model gets the short lines and returns which are headings and their level (structured output), code applies it, text never rewritten ("model judges, code applies"). Safety nets either way: contextual labels + retrieval evals.
+  - **Fix 2 (done):** `stitch_continued_tables`: table B is the continuation of table A when B directly follows A in reading order, starts on the next page, has the same number of columns and no header row; B's cells are appended below A's (row numbers shifted), A's provenance gains B's page, B is deleted. Spa list: 2 tables → 1 table of 27 rows on pages [1, 2]; the second half now reads "Rocky Mountain clay wrap, Duration = 80 min" instead of "1 = 80 min". Same limitation style as fix 1 (a rule for a known pattern).
+  - **Fix 3 (done, in `chunking.py`):** tables written as compact Markdown rows (`MarkdownTablesProvider` → `MarkdownTableSerializer`, `compact_tables=True`) instead of Docling's default `TripletTableSerializer` ("Swedish massage, Duration = 50 min. Swedish massage, Price = $145."); `repeat_table_header=True`. The spa table (27 rows, ~330 tokens) is now cut between rows into 2 pieces, each starting with "| Treatment | Duration | Price |"; no orphaned prices.
+  - **Result after all three fixes: 28 chunks** (guest information 10, house rules 11, room rates 2, spa 5), 81 tests passing. Small leftovers, left for the labels / not worth rules: PDF text keeps HTML escapes ("House Rules &amp; Policies"); the EXTRAS section of the spa table is split across the 2 pieces ("Private sauna" sits in the second piece without its "EXTRAS" row).
+- **Contextual labels: Claude Haiku 5.5** (`claude-haiku-5-5`, $0.10 / $0.50 per 1M tokens; decided 2026-11-10). A simple, one-off task (~50 short labels): "right model for the job" rather than the most capable one. Each document is sent once per chunk with prompt caching, as in Anthropic's contextual-retrieval recipe.
+- **Labels (6.3, `backoffice/rag/contextual_chunk_labels.py`)**: official Anthropic SDK; `ANTHROPIC_API_KEY` read via `config.py` (`SecretStr`, optional so DB-only code works without it). One call per chunk: system prompt (rules: one line ≤ 30 words, start with the document kind, name the section and topic, use guest search words, no prices/numbers, no new facts) + `<document>` block marked `cache_control` + `<chunk>` block; `effort: low`, `max_tokens` 1024. `Chunk` gained `label: str = ""` (filled via `dataclasses.replace`, the text never changes). Tests use a fake client (no cost).
+  - **First real run (28 chunks):** prompt caching worked for all 4 documents (1 cache write per document, then reads; the 646-token rate card is above Haiku's 512-token minimum). Total cost ≈ **$0.002**. Labels are good, e.g. "House rules: section 7 Transportation … hotel offers no shuttle service, front desk provides local taxi numbers"; "Spa price list 2026, Treatments table: extras such as private sauna and spa packages …"; the fees table is correctly described as "following the Children section". Minor rule slips: some labels keep small numbers ("minimum age 16", "under-14s") and one adds a word not in the chunk ("airport shuttle"). Acceptable for search; the agent answers from the chunk text, never from the label.
+  - Labels are stored in 6.4 (with the embeddings). They are non-deterministic: each indexing run may word them slightly differently.
+- **Embeddings + saving (6.4)**:
+  - `backoffice/rag/embeddings.py`: `make_voyage_client()` (`VOYAGE_API_KEY` via `config.py`), `embedding_input(chunk)` = label + headings + text, `embed_documents()` (`input_type="document"`, batches of 64), `embed_query()` (`input_type="query"`, for step 7).
+  - `schema.sql`: table `chunks` (id, document, chunk_index, headings `TEXT[]`, text, pages `INTEGER[]`, label, embedding `vector(1024)`, `search_text tsvector GENERATED ALWAYS AS (to_tsvector('english', label || ' ' || text)) STORED`, unique (document, chunk_index)); HNSW index (cosine) on embedding, GIN index on search_text.
+  - `backoffice/rag/index_documents.py`: the whole preparation in one command, `uv run python -m backoffice.rag.index_documents` (parse → cleanup → chunk → label → embed → save; one transaction: TRUNCATE + insert; idempotent). Re-run after changing a document.
+  - **Result:** 28 chunks indexed (10 + 11 + 2 + 5), all 1024-dim. First taste of search: the email #7 question ("Is the hedge maze open in August, and can kids use the pool alone?") returns Hedge maze (0.53), 9. Children (0.40), Indoor pool (0.39) as the top 3 by vector similarity; keyword search finds "shuttle" in "7. Transportation" and finds no chunk at all for "helicopter" (email #8's signal).
+  - Tests: fake Voyage client; database test inside `conn.transaction(force_rollback=True)` so the real index is never touched. 90 tests pass.
+
 ### Part B: processing one email (phase 1 graph)
 
 ```
@@ -323,6 +350,14 @@ Index: semantic (embeddings) + keyword
   - `data/supplier_prices.csv` (originally `contracts.csv`): 15 rows, columns `supplier,code,product,unit,price`.
   - `data/availability.csv`: 151 nights, Nov 1, 2026 – Mar 31, 2027, columns `date,rooms_total,rooms_booked`. Realistic pattern (quiet November, busier weekends and holidays, ski season). Only Dec 30 and Dec 31 are full. Checked against the emails: #3 Dec 18–20 free (24/32/41 rooms), #4 Feb 12–14 free, #5 Dec 30–31 full, #9 Dec 5–6 free.
   - Availability rule for the code: free = `rooms_total − rooms_booked`; bookable only if every night has ≥ 1 free room; a night missing from the file means "no data" → human, never "available".
+- **How it's built (step 5):**
+  - `docker-compose.yml`: image `pgvector/pgvector:pg17`, container `overlook-db`, named volume `overlook-db-data`, healthcheck. **Host port 5433** (5432 is used by another local project, `polyant-postgres`). Credentials in `.env` (random local password, git-ignored); `.env.example` is the template.
+  - `backoffice/config.py`: `Settings` (pydantic-settings) reads `DATABASE_URL` from the environment or `.env` (works from the repo root and from `backend/`).
+  - `backoffice/db/connection.py`: `connect()`, used in a `with` block (commit / rollback / close); `connect_timeout=5` so a stopped database fails fast instead of hanging (Windows).
+  - `backoffice/db/schema.sql` + `schema.py`: `CREATE EXTENSION vector`, tables `supplier_prices` (PK supplier+code, `NUMERIC(10,2)`, price ≥ 0) and `availability` (PK night, counts ≥ 0; overbooking allowed). Idempotent (`IF NOT EXISTS`). No migrations tool (Alembic) yet: overkill for two tables.
+  - `backoffice/db/seed.py`: reads the CSVs (`utf-8-sig`, so Excel files with a BOM work), validates every row and collects **all** problems with line numbers (missing values, bad numbers/dates, negative prices, > 2 decimals, duplicates, gaps; overbooking = warning), then loads in **one transaction** (schema, `TRUNCATE`, inserts). Idempotent. Run: `uv run python -m backoffice.db.seed`.
+  - `backoffice/db/queries.py`: `load_supplier_prices(conn, supplier=None) -> list[SupplierPrice]`, `load_nights(conn, start, end) -> dict[date, NightAvailability]` (start included, end excluded). `%s` placeholders only (no SQL injection). **The services are unchanged**: this data-access layer produces exactly their input types.
+  - Rows come back from psycopg as a list of tuples by default (`NUMERIC` → `Decimal`, `DATE` → `date`).
 - Rejected: Postgres + a separate vector database (e.g. Qdrant): two services to run and host, hybrid logic hidden.
 - Hosting note (decision still open): data persists on free Postgres tiers; the limits of free hosting are backend RAM (Docling) and sleeping, not data loss. All state lives in Postgres, never in the backend's own files.
 
@@ -340,6 +375,8 @@ Index: semantic (embeddings) + keyword
 - **Fixed sets of values are `StrEnum`s** (e.g. `AvailabilityStatus`), not loose strings.
 - **`ValueError` for impossible input** (e.g. check-out before check-in); **a status for real-world outcomes** the graph routes on (e.g. `full`, `no_data`).
 - Services receive their data as arguments (no file or database reads inside), so tests build small inputs by hand. Function and variable names in snake_case.
+- **Shape comments (requested by Arin, 2026-11-06):** whenever code builds or returns a non-trivial structure (lists of tuples, dicts of objects, nested data), add a comment just before it showing its shape with a short concrete example from the demo data, e.g. `# Shape returned: dict, key = date, value = NightAvailability` followed by 2–3 example entries and `...`. Applies to all new code; older files get them when they are next edited. **This includes objects that come IN from libraries**, not just what our functions return: e.g. a `DoclingDocument` (`doc.texts`, `doc.tables`, cells), what `enumerate(...)` / `zip(...)` / `iterate_items()` produce, and `model_dump()` dictionaries, shown with real values from the demo data. A module working on a library object starts with a reference block showing that object's shape (see `rag/cleanup.py`).
+- **Explain library terms in the code (requested by Arin, 2026-11-10):** every class, method or parameter that comes from a library (e.g. Docling's `HybridChunker`, `chunk(dl_doc=...)`, `DocChunk`, Pydantic's `model_validate`) gets a plain-language comment saying what it is and why it's used. In chat, explain each such term before using it; never leave `(...)` placeholders or vague phrases like "plus tables". Go one concept at a time.
 
 ### Folder structure (confirmed)
 
@@ -348,6 +385,8 @@ hotel-automation-agent/        ← the repo
   CLAUDE.md
   README.md
   .gitignore                   ← at the root, covers backend/ and frontend/
+  docker-compose.yml           ← local Postgres + pgvector (container overlook-db, host port 5433)
+  .env.example                 ← template for .env (real .env is git-ignored)
   backend/                     ← its own uv project (Python 3.12)
     pyproject.toml
     uv.lock
@@ -360,8 +399,10 @@ hotel-automation-agent/        ← the repo
           main_graph.py        ← builds the graph and the branch routing
           nodes/               ← shared nodes: read_email, classify, approval, action
           branches/            ← one file per branch: invoice, booking, question
-        services/              ← the real logic, plain Python: pricing, availability, contracts
-        rag/                   ← parsing, chunking, indexing, search
+        config.py              ← settings (DATABASE_URL) read from .env with pydantic-settings
+        db/                    ← connection, schema.sql + schema.py, seed.py (CSV → tables), queries.py (tables → service types)
+        services/              ← the real logic, plain Python: pricing, availability, invoice_check
+        rag/                   ← parsing.py, cleanup.py, chunking.py, contextual_chunk_labels.py, embeddings.py, index_documents.py; search (step 7)
         tools/                 ← wrap services as LLM tools (for the agent)
         mcp_server.py          ← exposes services via MCP
         prompts/               ← prompts in separate files, not inside the code
@@ -386,9 +427,9 @@ Rules: inside out (plain logic → graph → interface); every step ends with so
 | 2 | ✅ Demo-data decisions | Language, hotel, documents, suppliers, emails, database | | |
 | 3 | ✅ Demo data | 4 documents, 2 invoices, 10 `.eml`, 2 CSVs | | |
 | 4 | ✅ Services + tests | `services/pricing.py` (stay price with tax), `services/availability.py` (availability + alternative stays), `services/invoice_check.py` (unit normalisation, lookup by code / description, line check, totals check); 45 `pytest` tests. No AI, no database (data passed in) | | numbers behind #1–#5 |
-| **5** | **Postgres + seed** ← **next** | Postgres in Docker, seed script (CSV → tables, validation), services read from the DB | | |
-| 6 | Document preparation (Part A) | Docling parsing, hybrid chunker, contextual labels, chunks stored with embeddings + full-text index | Embedding model; model for labels | |
-| 7 | Hybrid search | Vector + keyword search, RRF merge, reranker; small retrieval test | Reranker | #6–#8 (search only) |
+| 5 | ✅ Postgres + seed | Postgres + pgvector in Docker (port 5433), `config.py`, `db/` (connection, schema, seed with validation, queries); services unchanged, fed by the data-access layer; 69 tests (8 need the database, skipped when Docker is off) | | |
+| 6 | ✅ Document preparation (Part A) | `rag/`: parsing (Docling), cleanup (2 rules), chunking (HybridChunker, Markdown tables), contextual labels (Haiku 5.5), embeddings (Voyage `voyage-4`), `index_documents.py` → `chunks` table (vector + full-text). 28 chunks; 90 tests | Embedding model (Voyage `voyage-4`); labels (Haiku 5.5) | |
+| **7** | **Hybrid search** ← **next** | Vector + keyword search, RRF merge, reranker; small retrieval test | Reranker | #6–#8 (search only) |
 | 8 | Graph skeleton + tracing | State, read node (`.eml` + attachments), classify node, code routing, empty branches; Langfuse from here on | State shape; models | all 10 (classification) |
 | 9 | Human approval + checkpointer | `interrupt()` approve / edit / reject, Postgres checkpointer, action node; before the branches so each ends properly | | #9, #10 |
 | 10 | Booking branch | Subgraph: extract → missing info → availability → price → quote or "full" reply | | #3, #4, #5 |
@@ -409,9 +450,8 @@ Why this order: search (6–7) is tested on its own before the graph, because RA
 
 Each is made at its step in section 7.
 
-- Embedding model; model for contextual labels (step 6)
 - Reranker (step 7)
-- State shape (exact fields); models: which model for which step, fallbacks (step 8)
+- State shape (exact fields); models: which model for which step, fallbacks (step 8). Arin's leaning: Haiku 5.5 wherever it's good enough (fixed demo emails); decide per step at step 8.
 - Backend web framework (step 15; the language is decided: Python 3.12 with uv)
 - Frontend framework (step 16)
 - Hosting and deployment (step 18)
@@ -455,4 +495,10 @@ Each is made at its step in section 7.
 - **2026-11-06**: `data/contracts.csv` renamed to `data/supplier_prices.csv` (and the future table to `supplier_prices`): it holds agreed prices, not contracts. Invoice line checks go in `services/invoice_check.py`; skeleton created, Arin completes it (section 6).
 - **2026-11-06**: Working mode changed: Arin focuses on architecture and design decisions (job hunting, interviews are architecture-heavy); Claude Code writes the code after the design is agreed, explains it at interview level, and writes and runs the tests (section 1).
 - **2026-11-06**: Step 4 done: pricing, availability (with alternative stays) and invoice checks (lines + totals) in `services/`, 45 passing tests. Next: step 5, Postgres + seed (section 7).
+- **2026-11-06**: New convention: shape comments with concrete examples before non-trivial returns and structures (section 6, code conventions). Added to `db/queries.py`.
+- **2026-11-09**: Step 5 done: Postgres + pgvector in Docker (host port 5433), schema, validated seed (one transaction, idempotent, Excel BOM handled), data-access queries; `connect_timeout=5` added after tests showed a stopped database hung forever on Windows. 69 tests pass (8 database tests skip when Docker is off). Next: step 6, document preparation (section 7).
+- **2026-11-10**: Embeddings: Voyage AI API (option A) rather than a local open-source model: Anthropic-recommended, keeps the backend light for hosting, same provider can rerank in step 7 (section 6, Part A).
+- **2026-11-10**: Contextual labels written by Claude Haiku 5.5: simple one-off task, fixed demo data, cost of larger models not justified. Models for the graph's LLM nodes and the agent still decided at step 8 (Arin leans towards Haiku where it's good enough) (section 6, Part A).
+- **2026-11-10**: Step 6.3 done (Haiku contextual labels, ≈ $0.002 for 28 chunks, caching verified). 6.4 design agreed: Voyage `voyage-4` (1024 dims), a `chunks` table (arrays for headings/pages, `vector(1024)`, generated `tsvector` for keyword search, vector + full-text indexes), `rag/embeddings.py` + `rag/index_documents.py` (whole preparation in one command, one transaction, idempotent) (section 6, Part A).
+- **2026-11-10**: Step 6 done: 28 chunks indexed in Postgres with Haiku labels and Voyage `voyage-4` vectors plus a generated full-text column; one-command, idempotent `index_documents.py`. Next: step 7, hybrid search (section 7).
 - **2026-11-04**: Claude Code keeps this file up to date itself whenever a decision is agreed; Arin writes the code (section 1, rule 9).

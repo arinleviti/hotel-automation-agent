@@ -14,4 +14,6 @@ def connect() -> psycopg.Connection:
         with connect() as conn:
             conn.execute("SELECT 1")
     """
-    return psycopg.connect(get_settings().database_url)
+    # connect_timeout: give up after 5 seconds per address instead of hanging forever when the
+    # database isn't running (on Windows an unanswered connection can otherwise wait indefinitely).
+    return psycopg.connect(get_settings().database_url, connect_timeout=5)
