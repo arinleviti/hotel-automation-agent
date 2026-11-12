@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from backoffice.db.seed import SeedError, parse_availability, parse_supplier_prices, read_csv
+from backoffice.db.seed import DATA_DIR, SeedError, parse_availability, parse_room_rates, parse_supplier_prices, read_csv
 
 # --- Helpers: CSV rows as read_csv returns them (every value is text) -----------------------
 
@@ -124,3 +124,35 @@ def test_overbooked_night_is_a_warning_not_an_error():
     assert data.nights[date(2026, 12, 18)].rooms_booked == 122     # still loaded
     assert len(data.warnings) == 1
     assert "overbooked" in data.warnings[0]
+
+# --- parse_room_rates (step 10.1) ------------------------------------------------------------
+
+
+def rates_row(room_type="Mountain View Room", adult="185.00", child="65.00", under_age="13", tax="0.104") -> dict[str, str]:
+    # Shape: {"room_type": "Mountain View Room", "adult_rate": "185.00", ..., "tax_rate": "0.104"}
+    return {"room_type": room_type, "adult_rate": adult, "child_rate": child,
+            "child_under_age": under_age, "tax_rate": tax}
+
+
+def test_the_real_room_rates_file_is_valid():
+    rates = parse_room_rates(read_csv(DATA_DIR / "room_rates.csv"))
+
+    assert rates.adult_rate == Decimal("185.00")
+    assert rates.child_rate == Decimal("65.00")
+    assert rates.child_under_age == 13
+    assert rates.tax_rate == Decimal("0.104")
+
+
+def test_room_rates_need_exactly_one_room_type():
+    with pytest.raises(SeedError):
+        parse_room_rates([])
+    with pytest.raises(SeedError):
+        parse_room_rates([rates_row(), rates_row(room_type="Suite")])
+
+
+def test_room_rates_report_every_bad_value():
+    # Tax written as a percentage (10.4 instead of 0.104) is a realistic mistake: it must be refused.
+    with pytest.raises(SeedError) as error:
+        parse_room_rates([rates_row(adult="lots", child="-5", under_age="thirteen", tax="10.4")])
+
+    assert len(error.value.problems) == 4

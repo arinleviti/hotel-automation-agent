@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     # API key for Voyage AI (embeddings: step 6.4 for chunks, step 7 for questions). Same rules.
     voyage_api_key: SecretStr | None = None
 
+    # Langfuse (tracing, step 8.4). Langfuse's own SDK only reads ENVIRONMENT variables, not the
+    # .env file, so we read them here and hand them to Langfuse explicitly (see tracing.py).
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: SecretStr | None = None
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    # Switch tracing off (the tests do this, so test runs don't fill Langfuse with fake traces).
+    tracing_enabled: bool = True
+
     model_config = SettingsConfigDict(
         # Looked up relative to where the command runs: works from the repo root and from backend/.
         env_file=(".env", "../.env"),

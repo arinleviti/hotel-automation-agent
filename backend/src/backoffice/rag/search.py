@@ -20,9 +20,14 @@ from dataclasses import dataclass
 
 import psycopg
 import voyageai
+from langfuse import observe
 
 from backoffice.rag.chunking import Chunk
 from backoffice.rag.embeddings import embed_query, embedding_input
+from backoffice.tracing import init_tracing
+
+# The Langfuse client must exist before the first @observe-decorated call (see tracing.py).
+init_tracing()
 
 RERANK_MODEL = "rerank-3-lite"   # decided in CLAUDE.md: free at our size, good results in our tests
 VECTOR_CANDIDATES = 8            # how many chunks vector search hands to the reranker
@@ -104,6 +109,10 @@ def rerank(voyage: voyageai.Client, question: str, candidates: list[SearchResult
     return ranked
 
 
+# @observe(as_type="retriever"): Langfuse records each search as a RETRIEVER observation, showing
+# the question (input) and the chunks found with their scores (output). capture_input=False because
+# the connection and the client aren't useful in a trace; the question is recorded via the name.
+@observe(name="search_documents", as_type="retriever", capture_input=False)
 def search_documents(
     conn: psycopg.Connection,
     voyage: voyageai.Client,

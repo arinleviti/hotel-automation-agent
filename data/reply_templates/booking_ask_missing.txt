@@ -1,0 +1,11 @@
+Dear $guest_name,
+
+Thank you for your enquiry, we'd be glad to help. So that we can check availability and prepare a quote, could you please let us know:
+
+$missing_items
+
+As soon as we hear from you, we'll get back to you with availability and the total price.
+
+Kind regards,
+Reservations
+The Overlook Hotel

@@ -3,6 +3,24 @@ from decimal import ROUND_HALF_UP, Decimal
 from dataclasses import dataclass
 
 @dataclass
+class RoomRates:
+    """
+    The hotel's room rates: what calculate_stay_price needs besides the stay itself (step 10.1).
+    Comes from data/room_rates.csv (loaded into the room_rates table by the seed script), which
+    stands for the rates in the hotel's booking system. Same numbers as the printed rate card.
+
+    Example (The Overlook, the only room type in phase 1):
+        RoomRates(room_type="Mountain View Room", adult_rate=Decimal("185.00"), child_rate=Decimal("65.00"),
+                  child_under_age=13, tax_rate=Decimal("0.104"))
+    """
+    room_type: str
+    adult_rate: Decimal          # per adult, per night
+    child_rate: Decimal          # per child, per night
+    child_under_age: int         # a guest YOUNGER than this pays the child rate (13: "under 13")
+    tax_rate: Decimal            # lodging tax as a decimal: 0.104 = 10.4%
+
+
+@dataclass
 class StayPrice:
     nights: int
     subtotal: Decimal

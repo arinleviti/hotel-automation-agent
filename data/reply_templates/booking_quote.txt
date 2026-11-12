@@ -1,0 +1,20 @@
+Dear $guest_name,
+
+Thank you for your enquiry. We're pleased to let you know that we have a room available for your stay:
+
+  Arrival:    $check_in
+  Departure:  $check_out ($nights)
+  Guests:     $guests
+  Room:       $room_type, breakfast included
+
+  Room total:           $subtotal
+  Lodging tax ($tax_rate):  $tax
+  Total:                $total
+
+To confirm your booking, simply reply to this email. A deposit equal to the first night is charged when the booking is confirmed; the balance is paid at check-out.
+
+We look forward to welcoming you to The Overlook.
+
+Kind regards,
+Reservations
+The Overlook Hotel

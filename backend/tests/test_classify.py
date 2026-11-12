@@ -27,7 +27,9 @@ class FakeClaude:
     def __init__(self, parsed_output=FORM, stop_reason="end_turn"):
         self.requests: list[dict] = []
         self.messages = SimpleNamespace(parse=self._parse)
-        self._answer = SimpleNamespace(stop_reason=stop_reason, parsed_output=parsed_output)
+        # usage = token counts, like a real response (the Langfuse tracing in classify.py reads them).
+        self._answer = SimpleNamespace(stop_reason=stop_reason, parsed_output=parsed_output,
+                                       usage=SimpleNamespace(input_tokens=500, output_tokens=60))
 
     def _parse(self, **request):
         self.requests.append(request)

@@ -12,8 +12,8 @@ import psycopg
 import pytest
 
 from backoffice.db.connection import connect
-from backoffice.db.queries import load_nights, load_supplier_prices
-from backoffice.db.seed import DATA_DIR, load, parse_availability, parse_supplier_prices, read_csv
+from backoffice.db.queries import load_nights, load_room_rates, load_supplier_prices
+from backoffice.db.seed import DATA_DIR, load, parse_availability, parse_room_rates, parse_supplier_prices, read_csv
 
 
 @pytest.fixture(scope="module")
@@ -31,7 +31,8 @@ def conn():
 
     prices = parse_supplier_prices(read_csv(DATA_DIR / "supplier_prices.csv"))
     availability = parse_availability(read_csv(DATA_DIR / "availability.csv"))
-    load(connection, prices, availability.nights)
+    rates = parse_room_rates(read_csv(DATA_DIR / "room_rates.csv"))
+    load(connection, prices, availability.nights, rates)
 
     yield connection          # the tests run here
     connection.close()        # cleanup after the last test of the file
@@ -73,7 +74,8 @@ def test_nights_outside_the_data_are_absent(conn):
 def test_seeding_twice_gives_the_same_result(conn):
     prices = parse_supplier_prices(read_csv(DATA_DIR / "supplier_prices.csv"))
     availability = parse_availability(read_csv(DATA_DIR / "availability.csv"))
-    load(conn, prices, availability.nights)
+    rates = parse_room_rates(read_csv(DATA_DIR / "room_rates.csv"))
+    load(conn, prices, availability.nights, rates)
 
     assert len(load_supplier_prices(conn)) == 15
     assert conn.execute("SELECT count(*) FROM availability").fetchone() == (151,)
@@ -84,3 +86,12 @@ def test_database_rejects_a_negative_price(conn):
     with pytest.raises(psycopg.errors.CheckViolation):
         with conn.transaction():
             conn.execute("INSERT INTO supplier_prices VALUES ('Test', 'X-1', 'Test', 'lb', -1.00)")
+
+
+def test_room_rates_come_back_as_in_the_rate_card(conn):
+    rates = load_room_rates(conn)
+
+    assert rates.room_type == "Mountain View Room"
+    assert (rates.adult_rate, rates.child_rate) == (Decimal("185.00"), Decimal("65.00"))
+    assert rates.child_under_age == 13
+    assert rates.tax_rate == Decimal("0.104")                  # NUMERIC(6,4) gives 0.1040: the same number

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 import backoffice.graph.nodes.classify as classify_module
-from backoffice.graph.main_graph import process_email_step_by_step
+from backoffice.graph.main_graph import process_email
 from backoffice.graph.nodes.decide_route import route_for
 from backoffice.graph.state import Classification
 
@@ -26,7 +26,7 @@ def test_suspicious_goes_to_a_human_even_if_confident():
     decision = route_for(form(type_="booking", suspicious=True, confidence=0.99))
 
     assert decision["route"] == "human"
-    assert decision["human_reason"] == "Suspicious: Instructions addressed to the assistant."
+    assert decision["reason_for_human_review"] == "Suspicious: Instructions addressed to the assistant."
 
 
 def test_other_goes_to_a_human():
@@ -37,7 +37,7 @@ def test_low_confidence_goes_to_a_human():
     decision = route_for(form(type_="booking", confidence=0.6))
 
     assert decision["route"] == "human"
-    assert "0.60" in decision["human_reason"]
+    assert "0.60" in decision["reason_for_human_review"]
 
 
 def test_confidence_exactly_at_the_threshold_is_accepted():
@@ -55,9 +55,11 @@ def test_confidence_exactly_at_the_threshold_is_accepted():
 def test_graph_runs_the_trunk_then_exactly_one_branch(monkeypatch, classification, expected_branch):
     # Fake Claude: classify returns the given form whatever the email.
     fake = SimpleNamespace(messages=SimpleNamespace(
-        parse=lambda **request: SimpleNamespace(stop_reason="end_turn", parsed_output=classification)))
+        parse=lambda **request: SimpleNamespace(stop_reason="end_turn", parsed_output=classification,
+                                                usage=SimpleNamespace(input_tokens=500, output_tokens=60))))
     monkeypatch.setattr(classify_module, "anthropic_client", lambda: fake)
 
-    _state, nodes_run = process_email_step_by_step("06_question_pool_and_spa")
+    result = process_email("06_question_pool_and_spa")
 
-    assert nodes_run == ["read_email", "classify", "decide_route", expected_branch]
+    # The run stops at approval (it pauses there), so the nodes that ran are the trunk + one branch.
+    assert result.nodes_run == ["read_email", "classify", "decide_route", expected_branch]

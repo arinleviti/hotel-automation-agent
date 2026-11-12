@@ -1,0 +1,13 @@
+Dear $guest_name,
+
+Thank you for your enquiry. Unfortunately we are fully booked for at least one night of your stay ($requested_stay).
+
+We do have rooms available for a stay of the same length on these dates:
+
+$alternatives
+
+If one of these suits you, simply reply to this email and we'll be happy to send you a quote.
+
+Kind regards,
+Reservations
+The Overlook Hotel

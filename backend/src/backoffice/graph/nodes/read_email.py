@@ -82,6 +82,10 @@ def read_email(state: EmailState) -> dict:
     """
     THE NODE. LangGraph calls it with the whole state; it returns only what it adds.
 
+    Tracing: no @observe needed here. Every NODE is recorded in Langfuse automatically by the
+    CallbackHandler that main_graph.py gives to LangGraph (with its input state and returned dict).
+    @observe is only for functions INSIDE a node that we want to see as separate sub-steps.
+
     Example:
         in:  {"email_path": ".../06_question_pool_and_spa.eml"}
         out: {"email": ParsedEmail(subject="Pool and spa question", ...)}

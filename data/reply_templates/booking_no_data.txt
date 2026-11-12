@@ -1,0 +1,13 @@
+This booking request was not answered automatically: there is no availability data for some of the nights requested, so availability can't be checked.
+
+Guest:      $sender
+Stay:       $requested_stay
+Guests:     $guests
+No data for: $nights_without_data
+
+Please check availability in the booking system and reply to the guest personally.
+
+---------- Original email ----------
+Subject: $original_subject
+
+$original_body
