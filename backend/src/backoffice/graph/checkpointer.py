@@ -73,6 +73,21 @@ STATE_TYPES = [
     ("backoffice.services.availability", "AvailabilityStatus"),  # step 10.3
     ("backoffice.services.availability", "AlternativeStay"),     # step 10.3
     ("backoffice.services.pricing", "StayPrice"),                # step 10.3
+    ("backoffice.graph.state", "InvoiceExtraction"),             # step 11
+    ("backoffice.graph.state", "ExtractedInvoiceLine"),          # step 11
+    ("backoffice.services.invoice_review", "InvoiceReview"),     # step 11
+    ("backoffice.services.invoice_review", "CheckedLine"),       # step 11
+    ("backoffice.services.invoice_review", "InvoiceOutcome"),    # step 11
+    ("backoffice.services.invoice_check", "InvoiceLine"),        # step 11
+    ("backoffice.services.invoice_check", "LineCheck"),          # step 11
+    ("backoffice.services.invoice_check", "LineVerdict"),        # step 11
+    ("backoffice.services.invoice_check", "SupplierPrice"),      # step 11
+    ("backoffice.services.invoice_check", "TotalsCheck"),        # step 11
+    ("backoffice.graph.state", "SearchRecord"),                  # step 12
+    ("backoffice.graph.state", "QuestionAnswer"),                # step 12
+    ("backoffice.rag.search", "SearchResult"),                   # step 12
+    ("backoffice.services.answer_check", "AnswerCheck"),         # step 12.2
+    ("backoffice.services.answer_check", "AnswerOutcome"),       # step 12.2
 ]
 
 

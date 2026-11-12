@@ -1,0 +1,11 @@
+Invoice checked: OK to pay.
+
+  Supplier:    $supplier
+  Invoice:     $invoice_number, dated $invoice_date
+  Amount due:  $total_due
+
+All $line_count lines match the agreed supplier prices, and the subtotal, tax and total add up:
+
+$line_table
+
+Accounts Payable automation, The Overlook Hotel

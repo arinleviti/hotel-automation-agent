@@ -29,10 +29,13 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Literal, TypedDict
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from backoffice.rag.search import SearchResult
+from backoffice.services.answer_check import AnswerCheck
 from backoffice.services.availability import AlternativeStay, AvailabilityResult
 from backoffice.services.booking_request import BookingRequest
+from backoffice.services.invoice_review import InvoiceReview
 from backoffice.services.pricing import StayPrice
 
 
@@ -48,6 +51,7 @@ class Attachment:
     filename: str
     content_type: str             # the file type the email declares, e.g. "application/pdf"
     markdown: str                 # the content as Markdown (Docling), "" if it couldn't be read
+    read_error: str = ""          # step 13: why it couldn't be read, e.g. "ConversionError: ..."; "" if fine
 
 
 @dataclass
@@ -154,6 +158,100 @@ class BookingExtraction(BaseModel):
         description="One sentence on anything ambiguous about the dates or the guests; empty string if all is clear.")
 
 
+# --- InvoiceExtraction: the form the invoice branch's LLM call fills in (step 11) -----------------
+#
+# Pydantic, written for Claude (docstrings and descriptions are sent as the answer format).
+# AMOUNTS ARE TEXT, exactly as printed ("4.60", "$1,795.50"), not numbers: a JSON number can come
+# back as 4.6 or 1795.5 (a float), while code needs exact Decimals. Code converts them
+# (graph/branches/invoice/extract.py, parse_amount) and never trusts the model's arithmetic: the
+# service redoes every multiplication and sum.
+#
+# Example (#1, Front Range Provisions, 2 of 5 lines):
+#   InvoiceExtraction(supplier_name="Front Range Provisions", invoice_number="FRP-INV-2026-1184",
+#       invoice_date="10/30/2026",
+#       lines=[ExtractedInvoiceLine(code="FRP-1021", description="Mozz. LM WM, 6x5 lb", quantity="30",
+#                                   unit_of_measure="LB", unit_price="4.60", line_total="138.00", status="ok", reason=""),
+#              ExtractedInvoiceLine(code=None, description="Eggs large Gr.A 15 dz case", quantity="15",
+#                                   unit_of_measure="DZ", unit_price="3.10", line_total="46.50", status="missing",
+#                                   reason="No item number printed."), ...],
+#       subtotal="504.50", tax="0.00", total="$504.50")
+
+
+class ExtractedInvoiceLine(BaseModel):
+    """One product or service line of the invoice, copied as printed."""
+
+    code: str | None = Field(description="The item number / code, exactly as printed; null if the line has none.")
+    description: str = Field(description="The line's description, exactly as printed.")
+    quantity: str = Field(
+        description="The number in the quantity column (e.g. Qty, Pieces), as printed. Not a pack size from the "
+                    "description: in 'Butter 36x1 lb' with Qty 20, the quantity is 20.")
+    unit_of_measure: str = Field(
+        description="What is counted (e.g. LB, DZ, BAG, piece): from the unit column if there is one, otherwise from "
+                    "the price column's header ('Price per piece' -> 'piece'). Both are normal invoice layouts.")
+    unit_price: str = Field(description="The price of one unit of measure, exactly as printed.")
+    line_total: str = Field(description="The line amount, exactly as printed.")
+    status: Literal["ok", "unclear", "missing"] = Field(
+        description="ok: every value could be read. unclear: a printed value is hard to read or could mean two "
+                    "different things. missing: a value is not printed at all (e.g. no item number).")
+    reason: str = Field(description="For unclear or missing: one sentence saying which value. Empty string for ok.")
+
+
+class InvoiceExtraction(BaseModel):
+    """A supplier invoice sent to a hotel, copied exactly as printed. Never calculate anything."""
+
+    supplier_name: str = Field(description="The supplier's name as printed on the invoice.")
+    invoice_number: str | None = Field(description="The invoice number as printed; null if none.")
+    invoice_date: str | None = Field(description="The invoice date as printed; null if none.")
+    lines: list[ExtractedInvoiceLine] = Field(
+        description="Every product or service line, in order. Not subtotal, tax, total, delivery or address rows.")
+    subtotal: str | None = Field(description="The subtotal as printed; null if none is printed.")
+    tax: str | None = Field(
+        description="The tax amount as printed ('0.00' if printed as zero or exempt); null if there is no tax line.")
+    total: str | None = Field(description="The total amount due as printed; null if none is printed.")
+
+
+# --- The question agent (step 12) ------------------------------------------------------------------
+#
+# SearchRecord (dataclass, ours): one search the agent made, kept for the evidence view.
+#   SearchRecord(query="hedge maze opening months",
+#                results=[SearchResult(chunk_id=7, document="overlook_guest_information.pdf",
+#                                      headings=["Hedge maze"], pages=[2], ..., rerank_score=0.66), ... 4 ...])
+#
+# QuestionAnswer (Pydantic, written for Claude): the agent's FINAL answer. It is the input schema of
+# the agent's `give_final_answer` tool: the agent finishes by calling that tool with this form.
+# extra="forbid" = no fields other than these (also required by the API's strict tool mode).
+#   #7: QuestionAnswer(status="answered", answer="Your son is welcome in the indoor pool with an adult ...",
+#                      sources=[12, 7], not_in_documents=["an age limit for the hedge maze"], guest_name="Daniel Reyes")
+#   #8: QuestionAnswer(status="not_found", answer="", sources=[3, 21],
+#                      not_in_documents=["a helicopter transfer from Denver International Airport"], guest_name="Richard Hale")
+
+
+@dataclass
+class SearchRecord:
+    """One search the agent made: the words it searched for and the chunks that came back."""
+
+    query: str
+    results: list[SearchResult] = field(default_factory=list)
+
+
+class QuestionAnswer(BaseModel):
+    """Your final answer to the guest's email, based only on the search results."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["answered", "not_found"] = Field(
+        description="answered: the documents answer the guest's main request (even if a detail is missing). "
+                    "not_found: the documents don't cover the main request.")
+    answer: str = Field(
+        description="The reply text for the guest, without greeting or signature: only facts found in the search "
+                    "results. If a detail they asked about isn't in the documents, say so plainly. Empty string if not_found.")
+    sources: list[int] = Field(description="The chunk numbers of every search result your answer uses.")
+    not_in_documents: list[str] = Field(
+        description="Each thing the guest asked about that the documents don't cover; empty list if none.")
+    guest_name: str | None = Field(
+        description="The name the guest signs with, exactly as written; null if there is none.")
+
+
 # --- The OUTGOING draft: what the hotel is about to send, waiting for a human's approval (step 9) ---
 #
 # INCOMING email = state["email"] (ParsedEmail), never changed.
@@ -245,9 +343,23 @@ class EmailState(TypedDict, total=False):
     final_human_decision: HumanDecision    # added by approval (9): what the staff member decided. all emails but only after a staff member answers
     final_outgoing_message: OutgoingDraft | None   # added by action (9.2): what actually went out (the edited version after "edit"); None after "reject". all emails, at the end
 
+    processing_error: dict                 # added by an error handler (13) when a step failed:
+                                           #   {"step": "invoice_branch > extract_invoice", "error": "RuntimeError: ..."}
+
     # --- booking branch only (step 10) ---
     booking_extraction: BookingExtraction  # added by extract_request (10.2): what the LLM READ, kept as it was (evidence)
     booking_request: BookingRequest        # added by extract_request (10.2): what CODE accepted, or what's missing
     availability_result: AvailabilityResult    # added by check_availability (10.3): available / full / no data. only complete requests
     stay_price: StayPrice                  # added by price_stay (10.3): nights, subtotal, tax, total. only if available
     alternative_stays: list[AlternativeStay]   # added by find_alternatives (10.3): up to 3 free stays nearby. only if full
+
+    # --- invoice branch only (step 11) ---
+    invoice_extraction: InvoiceExtraction  # added by extract_invoice (11.1): what the LLM READ, as printed (evidence)
+    invoice_review: InvoiceReview          # added by check_invoice (11.2): supplier, every line ✓/⚠/✗, totals, outcome
+
+    # --- question branch only (step 12: the agent) ---
+    agent_messages: list[dict]             # the conversation with the agent LLM (Anthropic message format), grows each turn
+    pending_search: dict | None            # the search the agent just asked for: {"id": tool-call id, "query": "..."}; None otherwise
+    searches: list[SearchRecord]           # every search made so far (evidence)
+    question_answer: QuestionAnswer        # the agent's final answer (when it calls give_final_answer)
+    answer_check: AnswerCheck              # added by check_agent_answer (12.2): send / not found / failed, + problems

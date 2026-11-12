@@ -1,0 +1,11 @@
+An invoice arrived from a supplier with no agreed prices on file, so it could not be checked.
+
+  From:        $sender
+  Supplier:    $supplier_name (as printed on the invoice)
+  Invoice:     $invoice_number, dated $invoice_date
+  Amount due:  $total_due (as printed)
+  Subject:     $original_subject
+
+Please check it by hand. If this is a new supplier, add their agreed prices so that future invoices can be checked automatically.
+
+Accounts Payable automation, The Overlook Hotel

@@ -72,7 +72,8 @@ def fake_world(monkeypatch, fake_actions_table):
 def test_the_subgraph_has_every_booking_node():
     nodes = set(build_booking_graph().get_graph().nodes)
     assert nodes == {"__start__", "extract_request", "check_availability", "price_stay", "find_alternatives",
-                     "ask_for_missing_info", "quote_reply", "full_reply", "no_data_reply", "__end__"}
+                     "ask_for_missing_info", "quote_reply", "full_reply", "no_data_reply", "__end__",
+                     "__default_error_handler__"}    # step 13: the subgraph's error handler
 
 
 def test_email_3_runs_the_quote_path_and_pauses_with_the_quote():

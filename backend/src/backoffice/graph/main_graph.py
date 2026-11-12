@@ -10,9 +10,9 @@ The graph now (step 10):
       |
     decide_route      (code)   Classification -> route (+ reason_for_human_review): the RULES
       |
-      +-- route = "invoice"  --> invoice_branch    (placeholder, stub draft; step 11)
+      +-- route = "invoice"  --> invoice_branch    (real: a SUBGRAPH, branches/invoice/subgraph.py)
       +-- route = "booking"  --> booking_branch    (real: a SUBGRAPH, branches/booking/subgraph.py)
-      +-- route = "question" --> question_branch   (placeholder, stub draft; step 12)
+      +-- route = "question" --> question_branch   (real: the AGENT loop subgraph, branches/question/subgraph.py)
       +-- route = "human"    --> human_review      (real: forward to the front desk)
       |                              every branch writes state["outgoing_draft"]: the OUTGOING message
     approval          (interrupt)  PAUSES the run until a staff member approves / edits / rejects
@@ -110,13 +110,15 @@ from pydantic import ValidationError                        # the error raised w
 # OURS (files in this project):
 from backoffice.graph.branches.booking.subgraph import build_booking_graph                 # branch "booking" (a subgraph)
 from backoffice.graph.branches.human_review import human_review                           # branch "human"
-from backoffice.graph.branches.placeholders import invoice_branch, question_branch        # stub branches
+from backoffice.graph.branches.invoice.subgraph import build_invoice_graph                 # branch "invoice" (a subgraph)
+from backoffice.graph.branches.question.subgraph import build_question_graph               # branch "question" (the agent)
 from backoffice.graph.checkpointer import memory_checkpointer, postgres_checkpointer      # where runs are saved
 from backoffice.graph.nodes.action import action                                          # node: record the decision
 from backoffice.graph.nodes.approval import approval                                      # node: pause for a human
 from backoffice.graph.nodes.classify import classify                                      # node: Claude sorts the email
 from backoffice.graph.nodes.decide_route import decide_route                              # node: the routing rules
 from backoffice.graph.nodes.read_email import read_email                                  # node: read the .eml
+from backoffice.graph.robustness import RETRY_ONCE, send_to_human_after_error            # step 13: retry + error handler
 from backoffice.graph.state import EmailState                                             # the state's shape
 from backoffice.tracing import flush_traces, graph_callbacks, init_tracing                # Langfuse setup
 
@@ -166,18 +168,26 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None) -> CompiledStat
     init_tracing()     # create the Langfuse client before the graph runs (see tracing.py)
     builder = StateGraph(EmailState)
 
+    # Robustness (step 13, see graph/robustness.py), on every node of the trunk and human_review:
+    #   retry_policy=RETRY_ONCE   a temporary failure (network, timeout, 5xx, wrong format) is retried once
+    #   error_handler=...         if it still fails: a note to the front desk, then straight to approval
+    # (The subgraphs set the same two things inside themselves. approval and action get neither:
+    #  if they fail, the run stops with the error rather than looping back to approval.)
+    safe = {"retry_policy": RETRY_ONCE, "error_handler": send_to_human_after_error}
+    # **safe (plain Python) = pass the dict's entries as keyword arguments: retry_policy=..., error_handler=...
+
     # The trunk: every email goes through these three.
-    builder.add_node("read_email", read_email)        # code: .eml -> ParsedEmail
-    builder.add_node("classify", classify)            # LLM:  ParsedEmail -> Classification
-    builder.add_node("decide_route", decide_route)    # code: Classification -> route
+    builder.add_node("read_email", read_email, **safe)        # code: .eml -> ParsedEmail
+    builder.add_node("classify", classify, **safe)            # LLM:  ParsedEmail -> Classification
+    builder.add_node("decide_route", decide_route, **safe)    # code: Classification -> route
 
     # The branches: each one writes state["outgoing_draft"], the outgoing message.
-    builder.add_node("invoice_branch", invoice_branch)
+    builder.add_node("invoice_branch", build_invoice_graph())     # a subgraph, like booking
     # A compiled GRAPH used as a node: LangGraph runs the whole booking subgraph here, then follows
     # the arrow out of "booking_branch" (to approval). See branches/booking/subgraph.py.
     builder.add_node("booking_branch", build_booking_graph())
-    builder.add_node("question_branch", question_branch)
-    builder.add_node("human_review", human_review)
+    builder.add_node("question_branch", build_question_graph())   # a subgraph: the agent loop
+    builder.add_node("human_review", human_review, **safe)
 
     # The human step: every draft waits here for a staff member.
     builder.add_node("approval", approval)
@@ -285,6 +295,10 @@ def run_until_pause_or_end(graph: CompiledStateGraph, graph_input: Any, thread_i
         for name in update:
             if name == "__interrupt__":
                 continue
+            # Step 13: LangGraph gives the error handler an internal name such as
+            # "__default_error_handler__"; shown as "error_handler" (e.g. "invoice_branch > error_handler").
+            if "error_handler" in name:
+                name = "error_handler"
             if namespace:
                 # Inside a subgraph: "booking_branch:4f2c..." -> "booking_branch"
                 box = namespace[0].split(":")[0]
@@ -341,9 +355,13 @@ def show_paused_run(result: RunResult) -> None:
     # " -> ".join([...]) = plain Python: glue a list of strings together with " -> " between them:
     #   ["read_email", "classify"] -> "read_email -> classify"
     print(f"nodes run  : {' -> '.join(result.nodes_run)}")
-    print(f"from       : {state['email'].sender}")
-    print(f"subject    : {state['email'].subject}")
-    print(f"route      : {state['route']}")
+    # Read from the approval request, not the state: after a failed step (step 13) the state may
+    # have no email or route, and the request already handles that.
+    if result.waiting_for_human:
+        incoming = result.waiting_for_human["incoming"]
+        print(f"from       : {incoming['sender']}")
+        print(f"subject    : {incoming['subject']}")
+        print(f"route      : {result.waiting_for_human['route']}")
 
     # state.get("key") = plain Python dict method: the value, or None if the key isn't there
     # (only route "human" has a reason_for_human_review).
@@ -357,7 +375,15 @@ def show_paused_run(result: RunResult) -> None:
         # .items() (plain Python) = the dict's (key, value) pairs: ("read_as", "Friday, ..."), ...
         evidence = result.waiting_for_human["evidence"]
         for key, value in evidence.items():
-            if value:                                   # skip empty ones ([] or "")
+            if not value:                               # skip empty ones ([] or "")
+                continue
+            # isinstance(value, list) (plain Python): is it a list? A list (e.g. an invoice's lines)
+            # is printed one item per line; anything else on one line.
+            if isinstance(value, list):
+                print(f"{key}:")
+                for item in value:
+                    print(f"  {item}")
+            else:
                 print(f"{key:<11}: {value}")            # {key:<11} = the key padded to 11 characters
         draft = result.waiting_for_human["outgoing_draft"]
         print("\n--- WAITING FOR APPROVAL: the outgoing draft ---")     # "\n" = an empty line first
@@ -373,7 +399,8 @@ def show_finished_run(result: RunResult) -> None:
     """Print how a resumed run ended: the decision and what was sent (the UI's Sent folder)."""
     print(f"thread_id  : {result.thread_id}")
     print(f"resumed    : {' -> '.join(result.nodes_run)}")
-    print(f"email      : {result.state['email'].subject}")
+    email = result.state.get("email")                 # missing if the email file couldn't be read
+    print(f"email      : {email.subject if email else result.state.get('email_path')}")
     print(f"decision   : {result.state['final_human_decision'].decision}")
     sent = result.state["final_outgoing_message"]       # None after a reject
     if sent:

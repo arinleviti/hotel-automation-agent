@@ -25,7 +25,10 @@ def make_voyage_client() -> voyageai.Client:
     key = get_settings().voyage_api_key
     if key is None:
         raise RuntimeError("VOYAGE_API_KEY is missing: add it to the .env file at the repo root.")
-    return voyageai.Client(api_key=key.get_secret_value())
+    # timeout=30.0: a call taking more than 30 s raises voyageai.error.Timeout instead of hanging
+    # (step 13: retried once by the graph's RETRY_ONCE, then the email goes to a person).
+    # max_retries=0 is Voyage's default: retries are LangGraph's job.
+    return voyageai.Client(api_key=key.get_secret_value(), timeout=30.0, max_retries=0)
 
 
 def embedding_input(chunk: Chunk) -> str:

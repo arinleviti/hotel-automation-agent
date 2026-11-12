@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import backoffice.graph.nodes.classify as classify_module
-from backoffice.graph.nodes.classify import CLASSIFY_MODEL, classify, email_for_prompt
+from backoffice.graph.nodes.classify import CLASSIFY_MODEL, classify, build_prompt
 from backoffice.graph.state import Attachment, Classification, ParsedEmail
 
 SUSPICIOUS_EMAIL = ParsedEmail(
@@ -67,7 +67,7 @@ def test_attachment_is_previewed_not_sent_whole():
     invoice = ParsedEmail(sender="s", to="t", subject="Invoice", date=None, body="See attached.",
                           attachments=[Attachment("inv.pdf", "application/pdf", "X" * 5000)])
 
-    text = email_for_prompt(invoice)
+    text = build_prompt(invoice)
 
     assert "Attachment: inv.pdf (application/pdf)" in text
     assert text.count("X") == classify_module.ATTACHMENT_PREVIEW_CHARS

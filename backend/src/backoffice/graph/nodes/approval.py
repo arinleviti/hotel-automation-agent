@@ -41,12 +41,16 @@ from dataclasses import asdict
 from langgraph.types import interrupt
 
 from backoffice.graph.branches.booking.replies import booking_evidence     # ours (step 10.5)
+from backoffice.graph.branches.invoice.replies import invoice_evidence     # ours (step 11.4)
+from backoffice.graph.branches.question.replies import question_evidence   # ours (step 12.3)
 from backoffice.graph.state import EmailState, HumanDecision
 
 # Per route: the function that summarises what the branch read and decided, for the approver.
-# Steps 11 and 12 add "invoice" (line checks) and "question" (the retrieved chunks).
+# (The "human" route has none: its draft already says why and quotes the original.)
 EVIDENCE_FOR_ROUTE = {
     "booking": booking_evidence,
+    "invoice": invoice_evidence,
+    "question": question_evidence,
 }
 
 
@@ -69,14 +73,24 @@ def approval_request(state: EmailState) -> dict:
          "evidence": {"read_as": "Friday, December 18 to Monday, December 21, 2026; 2 adults and 1 child",
                       "missing": [], "notes": [], "unclear": ""}
     """
-    email = state["email"]
-    route = state["route"]
-    make_evidence = EVIDENCE_FOR_ROUTE.get(route)      # None for routes with no evidence yet
+    # Step 13: after a FAILED step the state can be partial (no email if read_email failed, no route
+    # if classify failed, half a branch's keys), so everything is read with .get, and the evidence
+    # becomes the error itself instead of the branch's own (which could miss what it needs).
+    #   failed: "evidence": {"failed_step": "invoice_branch > extract_invoice", "error": "RuntimeError: ..."}
+    email = state.get("email")
+    route = state.get("route", "not routed")
+    error = state.get("processing_error")
+    if error:
+        evidence = {"failed_step": error["step"], "error": error["error"]}
+    else:
+        make_evidence = EVIDENCE_FOR_ROUTE.get(route)      # None for routes with no evidence (human)
+        evidence = make_evidence(state) if make_evidence else {}
     return {
-        "incoming": {"sender": email.sender, "subject": email.subject},
+        "incoming": {"sender": email.sender if email else "(unreadable email)",
+                     "subject": email.subject if email else state.get("email_path", "")},
         "route": route,
         "reason_for_human_review": state.get("reason_for_human_review", ""),
-        "evidence": make_evidence(state) if make_evidence else {},
+        "evidence": evidence,
         # asdict(...) = Python's standard way to turn a dataclass into a dict of its fields.
         "outgoing_draft": asdict(state["outgoing_draft"]),
     }

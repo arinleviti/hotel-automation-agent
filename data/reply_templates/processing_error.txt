@@ -1,0 +1,8 @@
+This email was not processed automatically: one of the steps failed. Please handle it personally.
+
+  Step:   $step
+  Error:  $error
+
+---------- Original email ----------
+
+$original

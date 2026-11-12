@@ -73,9 +73,17 @@ def read_attachment(part: EmailMessage) -> Attachment:
     filename = part.get_filename() or "attachment"
     content_type = part.get_content_type()             # e.g. "application/pdf"
     markdown = ""
+    read_error = ""
     if content_type == "application/pdf":
-        markdown = parse_bytes(filename, part.get_content()).export_to_markdown()
-    return Attachment(filename=filename, content_type=content_type, markdown=markdown)
+        # Step 13: an unreadable PDF must NOT fail the whole email: the sender, subject and text are
+        # still fine and a person needs them. So the attachment is kept with an empty text and the
+        # reason; the branch that needs it (the invoice branch) stops there with a clear error.
+        # try/except (plain Python): run the block; if it raises, run the except part instead.
+        try:
+            markdown = parse_bytes(filename, part.get_content()).export_to_markdown()
+        except Exception as error:         # any failure to read the PDF (Docling raises ConversionError)
+            read_error = f"{type(error).__name__}: {error}"[:300]
+    return Attachment(filename=filename, content_type=content_type, markdown=markdown, read_error=read_error)
 
 
 def read_email(state: EmailState) -> dict:

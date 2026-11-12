@@ -10,7 +10,7 @@ Real trace of email #9, as Langfuse shows it:
     LangGraph                          <- the whole run
       read_email                       <- node 1: in = the file path, out = the parsed email
       classify                         <- node 2
-        classify_email                 <- our function inside node 2
+        ask_llm_to_classify                 <- our function inside node 2
           anthropic.messages.create    <- the call to Claude: the prompt, Claude's answer,
                                           model=claude-haiku-5-5, 1478 + 139 tokens, $0.000217
       decide_route                     <- node 3: out = {"route": "human", "reason_for_human_review": ...}
@@ -53,21 +53,21 @@ HOW EACH LINE GETS THERE (three different ways)
    (This is a recent feature. With older versions you had to wrap the Claude call yourself:
    that's the "wrap the LLM call" pattern you may remember from your previous project.)
 
-3) Our own functions (classify_email, search_documents): the @observe DECORATOR.
+3) Our own functions (ask_llm_to_classify, search_documents): the @observe DECORATOR.
 
    This IS the "wrap a function" pattern. Writing @observe(...) on the line above a function
    wraps it: every call to the function is recorded as a step in the trace, with its result.
 
-       @observe(name="classify_email")
-       def classify_email(email): ...
+       @observe(name="ask_llm_to_classify")
+       def ask_llm_to_classify(email): ...
 
    means the same as writing, by hand:
 
-       def classify_email(email): ...
-       classify_email = observe(name="classify_email")(classify_email)   # replace it with a wrapped version
+       def ask_llm_to_classify(email): ...
+       ask_llm_to_classify = observe(name="ask_llm_to_classify")(ask_llm_to_classify)   # replace it with a wrapped version
 
    and the wrapped version does, roughly:
-       record "classify_email started"  ->  run the real classify_email  ->  record "finished, returned X"
+       record "ask_llm_to_classify started"  ->  run the real ask_llm_to_classify  ->  record "finished, returned X"
 
    We use it for functions we want to see by name in the trace, and for the Voyage calls in
    search_documents (Voyage, unlike Anthropic, doesn't report its calls by itself).
@@ -83,7 +83,7 @@ We use 5 things from the langfuse library:
  1. Python IMPORTS our files (before anything runs):
       nodes/classify.py and rag/search.py call init_tracing() at the top
         -> Langfuse(public_key=..., secret_key=..., base_url=...)   FIRST Langfuse call: the client
-      and @observe(...) wraps classify_email and search_documents (it just prepares the wrapper)
+      and @observe(...) wraps ask_llm_to_classify and search_documents (it just prepares the wrapper)
  2. process_email(name)   (main_graph.py)
       with propagate_attributes(trace_name="email <name>", session_id=thread_id, ...):
                                                                    "everything inside belongs to
@@ -92,7 +92,7 @@ We use 5 things from the langfuse library:
         graph_callbacks() -> [CallbackHandler(...)]                the handler, given to LangGraph
         while the graph runs:
           - each node starting/finishing  -> LangGraph tells the CallbackHandler  -> sent
-          - classify_email runs           -> the @observe wrapper records it      -> sent
+          - ask_llm_to_classify runs           -> the @observe wrapper records it      -> sent
           - the Claude call               -> recorded by the Langfuse client automatically
                                              (it receives the Anthropic library's OpenTelemetry reports)
  4. at the end: flush_traces() -> client.flush()   send whatever is still waiting

@@ -1,0 +1,14 @@
+A guest's question was not answered automatically: our documents don't cover it. Please reply to the guest personally.
+
+  Guest:    $sender
+  Subject:  $original_subject
+
+Not in our documents:
+$not_in_documents
+
+What the searches found instead (closest passages, relevance from 0 to 1):
+$searches
+
+---------- Original email ----------
+
+$original_body

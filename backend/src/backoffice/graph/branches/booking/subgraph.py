@@ -38,12 +38,17 @@ from backoffice.graph.branches.booking.checks import (after_availability, after_
 from backoffice.graph.branches.booking.extract import extract_request
 from backoffice.graph.branches.booking.replies import (ask_for_missing_info, full_reply, no_data_reply,
                                                        quote_reply)
+from backoffice.graph.robustness import RETRY_ONCE, end_branch_after_error   # step 13
 from backoffice.graph.state import EmailState
 
 
 def build_booking_graph() -> CompiledStateGraph:
     """Build and compile the booking subgraph (see the drawing at the top of this file)."""
     builder = StateGraph(EmailState)
+    # Robustness (step 13, graph/robustness.py), for EVERY node of this subgraph: a temporary
+    # failure is retried once; if a node still fails, the handler writes a note to the front desk
+    # and ends the subgraph, so the main graph goes on to approval as usual.
+    builder.set_node_defaults(retry_policy=RETRY_ONCE, error_handler=end_branch_after_error("booking_branch"))
 
     # Reading the request (the only LLM call in the branch).
     builder.add_node("extract_request", extract_request)

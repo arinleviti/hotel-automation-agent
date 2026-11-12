@@ -47,9 +47,11 @@ def test_confidence_exactly_at_the_threshold_is_accepted():
 @pytest.mark.parametrize(
     "classification, expected_branch",
     [
-        (form(type_="question"), "question_branch"),
-        (form(type_="invoice"), "invoice_branch"),
+        (form(type_="other"), "human_review"),
         (form(type_="booking", suspicious=True), "human_review"),
+        (form(type_="question", confidence=0.5), "human_review"),     # low confidence
+        # (invoice, booking and question run real subgraphs with their own LLM calls: tested end to
+        #  end in test_invoice_graph.py, test_booking_graph.py and test_question_graph.py)
     ],
 )
 def test_graph_runs_the_trunk_then_exactly_one_branch(monkeypatch, classification, expected_branch):

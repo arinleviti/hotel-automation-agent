@@ -49,7 +49,7 @@ SYSTEM_PROMPT = (Path(__file__).resolve().parents[2] / "prompts" / "classify_sys
 ATTACHMENT_PREVIEW_CHARS = 1500
 
 
-def email_for_prompt(email: ParsedEmail) -> str:
+def build_prompt(email: ParsedEmail) -> str:
     """
     How the email is shown to Claude.
 
@@ -76,14 +76,16 @@ def email_for_prompt(email: ParsedEmail) -> str:
         email.body,
     ]
     for attachment in email.attachments:
-        lines += ["", f"Attachment: {attachment.filename} ({attachment.content_type})",
-                  attachment.markdown[:ATTACHMENT_PREVIEW_CHARS]]
+        # Step 13: an attachment that couldn't be read has no text: say so, so the model classifies
+        # from the subject and text (e.g. still "invoice"); the invoice branch then stops on it.
+        preview = attachment.markdown[:ATTACHMENT_PREVIEW_CHARS] or "(this attachment could not be read)"
+        lines += ["", f"Attachment: {attachment.filename} ({attachment.content_type})", preview]
     return "<email>\n" + "\n".join(lines) + "\n</email>"
 
 
 # Tracing (Langfuse, step 8.4), what ends up in the trace for this function:
 #   classify                       <- the graph node (recorded by the LangGraph callback)
-#     classify_email               <- THIS function, recorded by @observe below (a named step)
+#     ask_llm_to_classify               <- THIS function, recorded by @observe below (a named step)
 #       anthropic.messages.create  <- the model call: recorded AUTOMATICALLY. The Anthropic SDK
 #                                     reports its own calls in OpenTelemetry format (a standard for
 #                                     traces) and Langfuse picks them up, with model, prompt,
@@ -95,8 +97,8 @@ def email_for_prompt(email: ParsedEmail) -> str:
 # recorded automatically by the LangGraph callback. @observe adds a named sub-step INSIDE the
 # classify node. It's optional: without it, the Claude call would simply appear directly under
 # "classify" in the trace.
-@observe(name="classify_email", capture_input=False)
-def classify_email(email: ParsedEmail) -> Classification:
+@observe(name="ask_llm_to_classify", capture_input=False)
+def ask_llm_to_classify(email: ParsedEmail) -> Classification:
     """
     One call to Claude Haiku; returns the filled-in form.
 
@@ -110,7 +112,7 @@ def classify_email(email: ParsedEmail) -> Classification:
         max_tokens=2048,                         # room for brief thinking + the short form
         output_config={"effort": "low"},         # a simple task: think little, answer fast
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": email_for_prompt(email)}],
+        messages=[{"role": "user", "content": build_prompt(email)}],
         output_format=Classification,            # the answer MUST match this Pydantic model
     )
 
@@ -130,4 +132,4 @@ def classify(state: EmailState) -> dict:
         in:  {"email_path": "...", "email": ParsedEmail(subject="Pool and spa question", ...)}
         out: {"classification": Classification(type="question", suspicious=False, confidence=0.97, ...)}
     """
-    return {"classification": classify_email(state["email"])}
+    return {"classification": ask_llm_to_classify(state["email"])}

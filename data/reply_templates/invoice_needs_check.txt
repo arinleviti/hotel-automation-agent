@@ -1,0 +1,15 @@
+This invoice was not cleared automatically: some lines need a person to check them before it is paid.
+
+  Supplier:    $supplier
+  Invoice:     $invoice_number, dated $invoice_date
+  Amount due:  $total_due
+
+To check:
+
+$to_check
+
+All lines:
+
+$line_table
+
+Accounts Payable automation, The Overlook Hotel

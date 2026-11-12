@@ -33,17 +33,14 @@ Run (from backend/; Postgres running; one Haiku call per email for the extractio
 import sys                                     # sys.argv: the words typed on the command line
 from datetime import date                      # a calendar date
 from decimal import Decimal                    # exact money amounts
-from pathlib import Path                       # Path: a file path you can join with /
-from string import Template                    # fills $placeholders in a text
 
 # OURS:
 from backoffice.graph.branches.booking.checks import current_room_rates   # the room_rates row (10.3), from Postgres
 from backoffice.graph.branches.human_review import FRONT_DESK      # "Front desk <frontdesk@overlook-hotel.example>"
+# Shared with the invoice branch since 11.3 (see templates.py for how a template is filled):
+from backoffice.graph.branches.templates import TEMPLATES_DIR, bullet_list, format_money, render, reply_subject
 from backoffice.graph.state import DraftKind, EmailState, OutgoingDraft
 from backoffice.services.availability import AlternativeStay
-
-# replies.py is at backend/src/backoffice/graph/branches/booking/ -> six levels up is the repo root.
-TEMPLATES_DIR = Path(__file__).resolve().parents[6] / "data" / "reply_templates"
 
 
 # --- Formatting: code turns exact values into text --------------------------------------------------
@@ -62,11 +59,6 @@ def format_stay(check_in: date, check_out: date) -> str:
     if check_in.year == check_out.year:
         return f"{check_in:%A, %B} {check_in.day} to {format_date(check_out)}"
     return f"{format_date(check_in)} to {format_date(check_out)}"
-
-
-def format_money(amount: Decimal) -> str:
-    """Decimal("1440.72") -> "$1,440.72"   (",.2f" = thousands separator, 2 decimals)"""
-    return f"${amount:,.2f}"
 
 
 def format_rate(rate: Decimal) -> str:
@@ -89,29 +81,6 @@ def format_guests(adults: int | None, children: int | None) -> str:
 def format_nights(nights: int) -> str:
     """3 -> "3 nights";  1 -> "1 night" """
     return f"{nights} night{'s' if nights != 1 else ''}"
-
-
-def bullet_list(lines: list[str]) -> str:
-    """["how many children ...", "the age of ..."] -> "  - how many children ...\n  - the age of ..." """
-    return "\n".join(f"  - {line}" for line in lines)
-
-
-def reply_subject(incoming_subject: str) -> str:
-    """"Room availability December 18-21" -> "Re: Room availability December 18-21" (no "Re: Re:")."""
-    if incoming_subject.lower().startswith("re:"):
-        return incoming_subject
-    return f"Re: {incoming_subject}"
-
-
-def render(template_name: str, values: dict[str, str]) -> str:
-    """
-    Read data/reply_templates/<template_name>.txt and fill its $placeholders.
-
-    Example: render("booking_ask_missing", {"guest_name": "Tom", "missing_items": "  - how many ..."})
-    Raises KeyError if the template uses a placeholder not in `values` (never a blank in an email).
-    """
-    text = (TEMPLATES_DIR / f"{template_name}.txt").read_text(encoding="utf-8")
-    return Template(text).substitute(values)
 
 
 def reply_to_guest(state: EmailState, body: str, reason: str) -> dict:

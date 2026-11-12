@@ -1,0 +1,9 @@
+Dear $guest_name,
+
+Thank you for your email.
+
+$answer
+
+Kind regards,
+Guest Services
+The Overlook Hotel

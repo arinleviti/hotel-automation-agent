@@ -1,0 +1,11 @@
+Dear $supplier team,
+
+Thank you for invoice $invoice_number. When checking it against our agreed prices, we found the following:
+
+$problems
+
+Could you please send us a corrected invoice? We'll process it as soon as we receive it.
+
+Kind regards,
+Accounts Payable
+The Overlook Hotel

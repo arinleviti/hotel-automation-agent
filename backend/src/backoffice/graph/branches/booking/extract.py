@@ -43,7 +43,7 @@ EXTRACT_MODEL = "claude-haiku-5-5"
 SYSTEM_PROMPT = (Path(__file__).resolve().parents[3] / "prompts" / "booking_extract_system.md").read_text(encoding="utf-8")
 
 
-def email_for_prompt(email: ParsedEmail) -> str:
+def build_prompt(email: ParsedEmail) -> str:
     """
     How the email is shown to Claude: the day it was received (for the year of "December 18"),
     then the email itself between <email> tags (data, never instructions).
@@ -63,10 +63,10 @@ def email_for_prompt(email: ParsedEmail) -> str:
             f"<email>\nFrom: {email.sender}\nSubject: {email.subject}\n\n{email.body}\n</email>")
 
 
-# @observe (Langfuse): this function appears as a named step "extract_booking_request" in the
+# @observe (Langfuse): this function appears as a named step "ask_llm_to_extract_booking" in the
 # trace; the Claude call inside it is recorded automatically (see tracing.py).
-@observe(name="extract_booking_request", capture_input=False)
-def extract_booking_request(email: ParsedEmail) -> BookingExtraction:
+@observe(name="ask_llm_to_extract_booking", capture_input=False)
+def ask_llm_to_extract_booking(email: ParsedEmail) -> BookingExtraction:
     """
     One call to Claude Haiku; returns the filled-in form (see BookingExtraction in state.py).
 
@@ -79,7 +79,7 @@ def extract_booking_request(email: ParsedEmail) -> BookingExtraction:
         max_tokens=2048,
         output_config={"effort": "low"},
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": email_for_prompt(email)}],
+        messages=[{"role": "user", "content": build_prompt(email)}],
         output_format=BookingExtraction,
     )
     # No valid form (the model refused, or ran out of room): step 13 will turn this into
@@ -129,7 +129,7 @@ def extract_request(state: EmailState) -> dict:
                                                    adults=2, children=1, guest_name="Sarah Mitchell", missing=[])}
     """
     email = state["email"]
-    extraction = extract_booking_request(email)
+    extraction = ask_llm_to_extract_booking(email)
     return {"booking_extraction": extraction,
             "booking_request": validated_request(extraction, email, current_room_rates())}
 

@@ -1,0 +1,18 @@
+A drafted answer to a guest was held back: it failed an automatic check. Please check it and reply to the guest personally.
+
+  Guest:    $sender
+  Subject:  $original_subject
+
+What failed:
+$problems
+
+The drafted answer (NOT sent):
+
+$answer
+
+Passages it was based on:
+$searches
+
+---------- Original email ----------
+
+$original_body
