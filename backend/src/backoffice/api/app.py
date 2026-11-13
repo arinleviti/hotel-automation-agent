@@ -132,6 +132,7 @@ from backoffice.db.connection import connect
 from backoffice.db.queries import (count_recent_runs, delete_old_runs, load_actions, load_latest_runs, load_run_visitor,
                                    save_run)
 from backoffice.graph.checkpointer import postgres_checkpointer
+from backoffice.graph.nodes.read_email import pdf_to_markdown
 from backoffice.graph.main_graph import EMAILS_DIR, build_graph, email_path_for, iter_steps, run_config, run_result
 from backoffice.graph.state import HumanDecision
 
@@ -199,6 +200,7 @@ def create_app(graph=None) -> FastAPI:
             if graph is None:
                 checkpointer = stack.enter_context(postgres_checkpointer())
                 app.state.graph = build_graph(checkpointer)
+                warm_up_pdfs()                 # step 18: before the first visitor, not during their run
             else:
                 app.state.graph = graph
             yield                              # the server runs here
@@ -374,6 +376,28 @@ def create_app(graph=None) -> FastAPI:
         app.mount("/", StaticFiles(directory=PAGE_DIR, html=True), name="page")
 
     return app
+
+
+def warm_up_pdfs() -> None:
+    """
+    Step 18: read every PDF attached to the demo emails ONCE, when the server starts, so Docling's
+    models are loaded and the texts are in read_email's cache before the first visitor clicks.
+    On Cloud Run this takes about a minute (with the startup CPU boost); the server opens its port
+    only after it, so visitors are never sent to a server that is still warming up.
+    Example: the two invoices, FRP-INV-2026-1184.pdf (#1) and SLL-10442.pdf (#2).
+    A PDF that fails here is skipped: read_email will try again (and handle the failure) in a real run.
+    """
+    print("Warming up: reading the demo emails' PDFs with Docling ...", flush=True)
+    for path in sorted(EMAILS_DIR.glob("*.eml")):
+        with path.open("rb") as file:
+            message = BytesParser(policy=policy.default).parse(file)
+        for part in message.iter_attachments():
+            if part.get_content_type() == "application/pdf":
+                try:
+                    pdf_to_markdown(part.get_filename() or "attachment", part.get_content())
+                    print(f"  read {part.get_filename()}", flush=True)
+                except Exception as error:     # skipped; the real run reports it properly
+                    print(f"  could not read {part.get_filename()}: {type(error).__name__}", flush=True)
 
 
 def check_spending_limits(visitor_id: str) -> None:

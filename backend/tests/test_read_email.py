@@ -1,6 +1,7 @@
 """Tests for the read_email node, on the 10 real demo emails (no LLM, no cost)."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from langgraph.graph import END, START, StateGraph
@@ -71,3 +72,43 @@ def test_node_inside_a_one_node_graph():
     assert set(final_state) == {"email_path", "email"}
     assert final_state["email"].subject == "presidents day weekend"
     assert "Sent from my iPhone" in final_state["email"].body
+
+
+# --- The PDF cache (step 18) ------------------------------------------------------------------------
+
+def test_a_pdf_is_read_by_docling_once_then_comes_from_the_cache(monkeypatch):
+    import backoffice.graph.nodes.read_email as read_email_module
+    calls = []
+
+    def fake_parse(filename, data):
+        calls.append(filename)
+        return SimpleNamespace(export_to_markdown=lambda: f"# {filename} ({len(data)} bytes)")
+
+    monkeypatch.setattr(read_email_module, "parse_bytes", fake_parse)
+    monkeypatch.setattr(read_email_module, "_PDF_TEXT_CACHE", {})
+
+    first = read_email_module.pdf_to_markdown("a.pdf", b"%PDF same bytes")
+    again = read_email_module.pdf_to_markdown("a.pdf", b"%PDF same bytes")
+    other = read_email_module.pdf_to_markdown("b.pdf", b"%PDF different bytes")
+
+    assert first == again == "# a.pdf (15 bytes)"
+    assert other == "# b.pdf (20 bytes)"
+    assert calls == ["a.pdf", "b.pdf"]           # Docling ran once per DIFFERENT file
+
+
+def test_a_failed_read_is_not_cached(monkeypatch):
+    import backoffice.graph.nodes.read_email as read_email_module
+    calls = []
+
+    def failing_parse(filename, data):
+        calls.append(filename)
+        raise RuntimeError("unreadable")
+
+    monkeypatch.setattr(read_email_module, "parse_bytes", failing_parse)
+    monkeypatch.setattr(read_email_module, "_PDF_TEXT_CACHE", {})
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            read_email_module.pdf_to_markdown("bad.pdf", b"not a pdf")
+
+    assert calls == ["bad.pdf", "bad.pdf"]       # tried again each time

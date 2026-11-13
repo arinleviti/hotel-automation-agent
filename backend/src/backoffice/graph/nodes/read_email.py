@@ -10,6 +10,7 @@ What it does:
      can read the invoice as text, tables included.
 """
 
+import hashlib                                  # sha256: a fingerprint of a file's bytes (the cache key)
 from email import policy
 from email.message import EmailMessage
 from email.parser import BytesParser
@@ -17,6 +18,27 @@ from pathlib import Path
 
 from backoffice.graph.state import Attachment, EmailState, ParsedEmail
 from backoffice.rag.parsing import parse_bytes
+
+# Step 18: PDFs already read by Docling, kept in memory for as long as this server runs.
+# On Cloud Run (1 CPU) reading a PDF with Docling takes 14-40 s; the demo's invoices are always the
+# same files, so each is read ONCE per server and remembered. The key is the SHA-256 fingerprint of
+# the file's bytes: the same bytes always give the same text, and a different or changed file has
+# a different fingerprint, so it is read in full. Only successful reads are kept.
+# Shape: {"3f9a1c...e2": "## FRONT RANGE PROVISIONS ... | Item # | Description | Qty | ...", ...}
+_PDF_TEXT_CACHE: dict[str, str] = {}
+
+
+def pdf_to_markdown(filename: str, data: bytes) -> str:
+    """
+    A PDF's content as Markdown: read by Docling the first time, from the cache after that.
+    Example: pdf_to_markdown("FRP-INV-2026-1184.pdf", b"%PDF-1.7 ...")
+             -> "## FRONT RANGE PROVISIONS ... | FRP-1021 | Mozz. LM WM, 6x5 lb | 30 | LB | 4.60 | 138.00 | ..."
+    Raises whatever Docling raises if the file can't be read (nothing is cached then).
+    """
+    key = hashlib.sha256(data).hexdigest()
+    if key not in _PDF_TEXT_CACHE:
+        _PDF_TEXT_CACHE[key] = parse_bytes(filename, data).export_to_markdown()
+    return _PDF_TEXT_CACHE[key]
 
 
 def parse_eml(path: Path) -> ParsedEmail:
@@ -80,7 +102,7 @@ def read_attachment(part: EmailMessage) -> Attachment:
         # reason; the branch that needs it (the invoice branch) stops there with a clear error.
         # try/except (plain Python): run the block; if it raises, run the except part instead.
         try:
-            markdown = parse_bytes(filename, part.get_content()).export_to_markdown()
+            markdown = pdf_to_markdown(filename, part.get_content())     # Docling, or the cache (step 18)
         except Exception as error:         # any failure to read the PDF (Docling raises ConversionError)
             read_error = f"{type(error).__name__}: {error}"[:300]
     return Attachment(filename=filename, content_type=content_type, markdown=markdown, read_error=read_error)

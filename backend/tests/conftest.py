@@ -41,3 +41,14 @@ def fake_actions_table(monkeypatch):
     monkeypatch.setattr(action_module, "connect", lambda: nullcontext())
     monkeypatch.setattr(action_module, "save_action", fake_save_action)
     return saved
+
+
+@pytest.fixture(autouse=True)
+def empty_pdf_cache(monkeypatch):
+    """
+    Every test starts with an EMPTY PDF cache (read_email's _PDF_TEXT_CACHE, step 18), so a PDF read
+    by one test can't answer for another (e.g. a test that makes Docling fail on purpose).
+    autouse=True (pytest): applied to every test without being named.
+    """
+    import backoffice.graph.nodes.read_email as read_email_module
+    monkeypatch.setattr(read_email_module, "_PDF_TEXT_CACHE", {})
