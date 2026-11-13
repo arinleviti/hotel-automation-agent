@@ -62,6 +62,7 @@ def approval_request(state: EmailState) -> dict:
     Shape returned (email #9, texts shortened):
         {"incoming": {"sender": "Mark Ellison <...>", "subject": "Re: our stay Dec 5-7"},
          "route": "human",
+         "suspicious": True,
          "reason_for_human_review": "Suspicious: Contains instructions addressed to the automated assistant ...",
          "evidence": {},
          "outgoing_draft": {"kind": "forward_to_staff",
@@ -79,6 +80,7 @@ def approval_request(state: EmailState) -> dict:
     #   failed: "evidence": {"failed_step": "invoice_branch > extract_invoice", "error": "RuntimeError: ..."}
     email = state.get("email")
     route = state.get("route", "not routed")
+    classification = state.get("classification")
     error = state.get("processing_error")
     if error:
         evidence = {"failed_step": error["step"], "error": error["error"]}
@@ -89,6 +91,9 @@ def approval_request(state: EmailState) -> dict:
         "incoming": {"sender": email.sender if email else "(unreadable email)",
                      "subject": email.subject if email else state.get("email_path", "")},
         "route": route,
+        # Step 16.4: did classify flag the email as suspicious? Lets the page count "suspicious, blocked"
+        # in the "Process whole inbox" summary without guessing from the reason's wording.
+        "suspicious": bool(classification and classification.suspicious),
         "reason_for_human_review": state.get("reason_for_human_review", ""),
         "evidence": evidence,
         # asdict(...) = Python's standard way to turn a dataclass into a dict of its fields.

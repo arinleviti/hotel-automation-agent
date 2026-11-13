@@ -1,0 +1,80 @@
+{
+  "_about": "The graph's bird's-eye view, drawn by components/SchemaPanel.tsx. Node ids are the REAL node names, as the step log shows them ('branch > node' inside a branch). backend/tests/test_schema_matches_graph.py checks these nodes and edges against the compiled LangGraph graphs, so this drawing can't drift from the code. x = left edge (or cx = centre, for the boxes in the middle column), y = centre (SVG units). who = who does the work: llm (ONE Claude call filling a fixed form: not an agent), agent (Claude in a loop with a tool: the only agent), search, code, person. note = the second line inside the box: what it does, or WHEN the path goes there.",
+  "width": 1200,
+  "height": 885,
+  "groups": [
+    { "id": "invoice_branch", "kind": "subgraph", "x": 20, "y": 225, "w": 270, "h": 495 },
+    { "id": "booking_branch", "kind": "subgraph", "x": 310, "y": 225, "w": 320, "h": 495 },
+    { "id": "question_branch", "kind": "subgraph — the only agent", "x": 650, "y": 225, "w": 320, "h": 495 },
+    { "id": "human route", "kind": "suspicious, 'other', or unsure", "x": 990, "y": 225, "w": 190, "h": 495 }
+  ],
+  "nodes": [
+    { "id": "read_email", "cx": 600, "y": 40, "who": "code", "note": "opens the .eml; PDFs → text (Docling)" },
+    { "id": "classify", "cx": 600, "y": 100, "who": "llm", "note": "what kind of email? suspicious? sure?" },
+    { "id": "decide_route", "cx": 600, "y": 160, "who": "code", "note": "code picks ONE route" },
+
+    { "id": "invoice_branch > extract_invoice", "x": 40, "y": 285, "who": "llm", "note": "copies every invoice line" },
+    { "id": "invoice_branch > check_invoice", "x": 40, "y": 341, "who": "code", "note": "prices vs contract, totals" },
+    { "id": "invoice_branch > ok_to_pay_note", "x": 70, "y": 397, "who": "code", "note": "if every line is ✓" },
+    { "id": "invoice_branch > correction_request", "x": 70, "y": 453, "who": "code", "note": "if a price or total is ✗" },
+    { "id": "invoice_branch > needs_check_note", "x": 70, "y": 509, "who": "code", "note": "if only ⚠ (unclear)" },
+    { "id": "invoice_branch > unknown_supplier_note", "x": 70, "y": 565, "who": "code", "note": "if no contract on file" },
+
+    { "id": "booking_branch > extract_request", "x": 330, "y": 285, "who": "llm", "note": "reads dates and guests" },
+    { "id": "booking_branch > ask_for_missing_info", "x": 360, "y": 341, "who": "code", "note": "if info is missing" },
+    { "id": "booking_branch > check_availability", "x": 360, "y": 397, "who": "code", "note": "if info is complete" },
+    { "id": "booking_branch > price_stay", "x": 390, "y": 453, "who": "code", "note": "if free every night" },
+    { "id": "booking_branch > quote_reply", "x": 420, "y": 509, "who": "code", "note": "the quote" },
+    { "id": "booking_branch > find_alternatives", "x": 390, "y": 565, "who": "code", "note": "if fully booked" },
+    { "id": "booking_branch > full_reply", "x": 420, "y": 621, "who": "code", "note": "'full' + 3 nearby dates" },
+    { "id": "booking_branch > no_data_reply", "x": 390, "y": 677, "who": "code", "note": "if nights not in data" },
+
+    { "id": "question_branch > agent", "x": 670, "y": 285, "who": "agent", "note": "search again, or answer?" },
+    { "id": "question_branch > search_step", "x": 700, "y": 341, "who": "search", "note": "RAG: searches the documents" },
+    { "id": "question_branch > check_agent_answer", "x": 700, "y": 397, "who": "code", "note": "sources real? $ in them?" },
+    { "id": "question_branch > answer_reply", "x": 730, "y": 453, "who": "code", "note": "if the checks pass" },
+    { "id": "question_branch > not_found_note", "x": 730, "y": 509, "who": "code", "note": "if not in the docs" },
+    { "id": "question_branch > check_failed_note", "x": 730, "y": 565, "who": "code", "note": "if a check failed" },
+
+    { "id": "human_review", "x": 1010, "y": 285, "who": "code", "note": "forward to front desk" },
+
+    { "id": "approval", "cx": 600, "y": 785, "who": "person", "note": "approve, edit or reject" },
+    { "id": "action", "cx": 600, "y": 845, "who": "code", "note": "records what was sent" }
+  ],
+  "human_note": ["Nothing is answered", "automatically: the", "email goes to the", "front desk with the", "reason."],
+  "edges": [
+    { "from": "read_email", "to": "classify", "conditional": false },
+    { "from": "classify", "to": "decide_route", "conditional": false },
+    { "from": "decide_route", "to": "invoice_branch", "conditional": true },
+    { "from": "decide_route", "to": "booking_branch", "conditional": true },
+    { "from": "decide_route", "to": "question_branch", "conditional": true },
+    { "from": "decide_route", "to": "human_review", "conditional": true },
+
+    { "from": "invoice_branch > extract_invoice", "to": "invoice_branch > check_invoice", "conditional": false },
+    { "from": "invoice_branch > check_invoice", "to": "invoice_branch > ok_to_pay_note", "conditional": true },
+    { "from": "invoice_branch > check_invoice", "to": "invoice_branch > correction_request", "conditional": true },
+    { "from": "invoice_branch > check_invoice", "to": "invoice_branch > needs_check_note", "conditional": true },
+    { "from": "invoice_branch > check_invoice", "to": "invoice_branch > unknown_supplier_note", "conditional": true },
+
+    { "from": "booking_branch > extract_request", "to": "booking_branch > ask_for_missing_info", "conditional": true },
+    { "from": "booking_branch > extract_request", "to": "booking_branch > check_availability", "conditional": true },
+    { "from": "booking_branch > check_availability", "to": "booking_branch > price_stay", "conditional": true },
+    { "from": "booking_branch > check_availability", "to": "booking_branch > find_alternatives", "conditional": true },
+    { "from": "booking_branch > check_availability", "to": "booking_branch > no_data_reply", "conditional": true },
+    { "from": "booking_branch > price_stay", "to": "booking_branch > quote_reply", "conditional": false },
+    { "from": "booking_branch > find_alternatives", "to": "booking_branch > full_reply", "conditional": false },
+
+    { "from": "question_branch > agent", "to": "question_branch > search_step", "conditional": true },
+    { "from": "question_branch > agent", "to": "question_branch > check_agent_answer", "conditional": true },
+    { "from": "question_branch > search_step", "to": "question_branch > agent", "conditional": false },
+    { "from": "question_branch > check_agent_answer", "to": "question_branch > answer_reply", "conditional": true },
+    { "from": "question_branch > check_agent_answer", "to": "question_branch > not_found_note", "conditional": true },
+    { "from": "question_branch > check_agent_answer", "to": "question_branch > check_failed_note", "conditional": true },
+
+    { "from": "invoice_branch", "to": "approval", "conditional": false },
+    { "from": "booking_branch", "to": "approval", "conditional": false },
+    { "from": "question_branch", "to": "approval", "conditional": false },
+    { "from": "human_review", "to": "approval", "conditional": false },
+    { "from": "approval", "to": "action", "conditional": false }
+  ]
+}

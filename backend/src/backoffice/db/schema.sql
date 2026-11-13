@@ -75,6 +75,25 @@ CREATE TABLE IF NOT EXISTS actions (
     decided_at        TIMESTAMPTZ  NOT NULL DEFAULT now()     -- set by Postgres when the row is written
 );
 
+-- Every run started from the backend API (step 15): which email, when. The inbox shows each email's
+-- LATEST run and its status: no row in `actions` yet = waiting for approval; otherwise the decision.
+-- (The run's state itself lives in LangGraph's checkpoint tables, which our code never reads directly.)
+-- Step 16.2: each run belongs to ONE visitor of the demo (visitor_id, a random id made by their
+-- browser), so every visitor sees only their own inbox status and Sent folder. Runs older than
+-- 2 hours are deleted by the API (queries.delete_old_runs).
+-- Example row: thread_id='31917ec5-...', email_name='03_booking_complete',
+--              started_at='2026-11-13 10:02:11+01', visitor_id='7c1e2b0a-4f5d-4e8a-9a51-3c0d2e9f1b77'
+CREATE TABLE IF NOT EXISTS runs (
+    thread_id    TEXT         PRIMARY KEY,
+    email_name   TEXT         NOT NULL,
+    started_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    visitor_id   TEXT         NOT NULL DEFAULT ''        -- '' = started outside the web page (older runs)
+);
+-- For a database created before step 16.2: add the column if it isn't there yet (idempotent).
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS visitor_id TEXT NOT NULL DEFAULT '';
+-- "This visitor's runs, newest first per email": the inbox query.
+CREATE INDEX IF NOT EXISTS runs_visitor_idx ON runs (visitor_id, email_name, started_at DESC);
+
 -- Indexes: lookup structures that keep searches fast as the table grows (with 28 rows Postgres
 -- wouldn't need them, but they are what a real deployment uses).
 -- HNSW: pgvector's index for "find the vectors closest to this one" (cosine distance).

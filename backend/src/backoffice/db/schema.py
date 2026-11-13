@@ -22,7 +22,7 @@ if __name__ == "__main__":
     # Our tables (schema.sql).
     with connect() as conn:
         apply_schema(conn)
-    print("Schema applied: tables supplier_prices, availability, room_rates, chunks and actions are ready.")
+    print("Schema applied: tables supplier_prices, availability, room_rates, chunks, actions and runs are ready.")
 
     # LangGraph's tables, where paused runs are saved (step 9.3). Imported here, not at the top:
     # graph/checkpointer.py imports LangGraph, which the seed script (also using apply_schema) doesn't need.

@@ -81,6 +81,7 @@ def test_suspicious_email_pauses_with_the_draft_for_approval(monkeypatch):
     request = result.waiting_for_human
     # Shape of request: {"incoming": {...}, "route": "human", "reason_for_human_review": "...", "outgoing_draft": {...}}
     assert request["route"] == "human"
+    assert request["suspicious"] is True                                  # for the whole-inbox summary
     assert request["incoming"]["subject"] == "Re: our stay Dec 5-7"
     assert request["outgoing_draft"]["kind"] == "forward_to_staff"
     assert request["outgoing_draft"]["outgoing_to"] == FRONT_DESK

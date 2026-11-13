@@ -8,7 +8,7 @@ The services never touch the database: these functions load the data, the caller
     result = check_availability(check_in, check_out, nights)
 """
 
-from datetime import date
+from datetime import date, timedelta
 
 import psycopg
 
@@ -132,3 +132,108 @@ def load_room_rates(conn: psycopg.Connection) -> RoomRates:
     room_type, adult_rate, child_rate, child_under_age, tax_rate = rows[0]
     return RoomRates(room_type=room_type, adult_rate=adult_rate, child_rate=child_rate,
                      child_under_age=child_under_age, tax_rate=tax_rate)
+
+
+# --- Runs and actions, for the backend API (step 15) ------------------------------------------------
+
+def save_run(conn: psycopg.Connection, thread_id: str, email_name: str, visitor_id: str = "") -> None:
+    """
+    Record that a run started (one row in `runs`), and WHOSE run it is (step 16.2).
+    Example: save_run(conn, "31917ec5-...", "03_booking_complete", "7c1e2b0a-...")
+    """
+    conn.execute("INSERT INTO runs (thread_id, email_name, visitor_id) VALUES (%s, %s, %s)"
+                 " ON CONFLICT (thread_id) DO NOTHING",
+                 (thread_id, email_name, visitor_id))
+
+
+def load_latest_runs(conn: psycopg.Connection, visitor_id: str) -> dict[str, dict]:
+    """
+    ONE VISITOR's latest run of each email, with its decision if it has one (from `actions`).
+    Another visitor's runs are never returned: each visitor sees their own inbox.
+
+    DISTINCT ON (email_name) ... ORDER BY email_name, started_at DESC (Postgres): keep only the first
+    row per email, i.e. the newest. LEFT JOIN actions: the decision, or NULL while waiting.
+
+    Shape returned: dict, key = email name (only the emails this visitor processed)
+        {"03_booking_complete": {"thread_id": "31917ec5-...", "started_at": datetime(...), "decision": "approve"},
+         "08_question_helicopter_not_found": {"thread_id": "1e72...", "started_at": datetime(...), "decision": None},
+         ...}
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT ON (r.email_name) r.email_name, r.thread_id, r.started_at, a.decision"
+        " FROM runs r LEFT JOIN actions a ON a.thread_id = r.thread_id"
+        " WHERE r.visitor_id = %s"
+        " ORDER BY r.email_name, r.started_at DESC",
+        (visitor_id,),
+    ).fetchall()
+    return {name: {"thread_id": thread_id, "started_at": started_at, "decision": decision}
+            for name, thread_id, started_at, decision in rows}
+
+
+def load_actions(conn: psycopg.Connection, visitor_id: str) -> list[dict]:
+    """
+    ONE VISITOR's decisions, newest first: what was sent (approve/edit) or rejected. The UI's "Sent" folder.
+    JOIN runs: an action belongs to a visitor through its run (same thread_id).
+
+    Shape returned: list of dicts
+        [{"thread_id": "31917ec5-...", "email_name": "03_booking_complete", "decision": "approve",
+          "kind": "reply_to_sender", "outgoing_to": "Sarah Mitchell <...>", "outgoing_subject": "Re: ...",
+          "outgoing_body": "Dear Sarah Mitchell, ...", "comment": "", "decided_at": datetime(...)},
+         ...]
+    """
+    columns = ("thread_id", "email_name", "decision", "kind", "outgoing_to", "outgoing_subject",
+               "outgoing_body", "comment", "decided_at")
+    rows = conn.execute(
+        f"SELECT {', '.join('a.' + c for c in columns)}"
+        " FROM actions a JOIN runs r ON r.thread_id = a.thread_id"
+        " WHERE r.visitor_id = %s ORDER BY a.decided_at DESC",
+        (visitor_id,),
+    ).fetchall()
+    # zip(columns, row) (plain Python): pairs each column name with its value -> dict(...) builds the dict
+    return [dict(zip(columns, row)) for row in rows]
+
+
+def load_run_visitor(conn: psycopg.Connection, thread_id: str) -> str | None:
+    """
+    Whose run is this? The visitor_id saved with it, or None if there is no such run.
+    The API uses it so a visitor can only open or decide THEIR OWN runs.
+    Example: load_run_visitor(conn, "31917ec5-...") -> "7c1e2b0a-..."
+    """
+    row = conn.execute("SELECT visitor_id FROM runs WHERE thread_id = %s", (thread_id,)).fetchone()
+    return row[0] if row else None
+
+
+def delete_old_runs(conn: psycopg.Connection, older_than: timedelta) -> list[str]:
+    """
+    The demo's cleanup (step 16.2): delete every run started more than `older_than` ago (2 hours in
+    the API), with its decision, and every decision older than that (also the command line's ones).
+    Returns the thread_ids of the deleted runs, so the caller can also delete their checkpoints
+    (the saved graph states, in LangGraph's own tables).
+
+    Example: delete_old_runs(conn, timedelta(hours=2)) -> ["31917ec5-...", "1e72..."]
+    `now() - %s` (Postgres): the current time minus the interval psycopg sends for the timedelta.
+    """
+    old_runs = "SELECT thread_id FROM runs WHERE started_at < now() - %s"
+    conn.execute(f"DELETE FROM actions WHERE decided_at < now() - %s OR thread_id IN ({old_runs})",
+                 (older_than, older_than))
+    rows = conn.execute("DELETE FROM runs WHERE started_at < now() - %s RETURNING thread_id",
+                        (older_than,)).fetchall()
+    return [thread_id for (thread_id,) in rows]
+
+
+def count_recent_runs(conn: psycopg.Connection, visitor_id: str) -> tuple[int, int]:
+    """
+    How many runs were started recently, for the demo's spending limits (step 18):
+    (this visitor's runs in the last 2 hours, everyone's runs in the last hour).
+    Example: count_recent_runs(conn, "7c1e2b0a-...") -> (12, 47)
+
+    count(*) FILTER (WHERE ...) (Postgres): counts only the rows that match the condition, so both
+    numbers come from one pass over the table.
+    """
+    row = conn.execute(
+        "SELECT count(*) FILTER (WHERE visitor_id = %s AND started_at > now() - interval '2 hours'),"
+        "       count(*) FILTER (WHERE started_at > now() - interval '1 hour')"
+        " FROM runs",
+        (visitor_id,),
+    ).fetchone()
+    return row[0], row[1]

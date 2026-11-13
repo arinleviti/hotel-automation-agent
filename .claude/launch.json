@@ -1,0 +1,33 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--directory", "backend", "uvicorn", "backoffice.api.app:app", "--port", "8000"],
+      "port": 8000
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
+      "port": 5173
+    },
+    {
+      "name": "backend-preview",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "--directory", "backend", "uvicorn", "backoffice.api.app:app", "--port", "8010"],
+      "env": { "CORS_ORIGINS": "http://localhost:5180" },
+      "port": 8010,
+      "autoPort": false
+    },
+    {
+      "name": "frontend-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "frontend", "--", "--port", "5180", "--strictPort"],
+      "env": { "VITE_API_URL": "http://localhost:8010" },
+      "port": 5180,
+      "autoPort": false
+    }
+  ]
+}

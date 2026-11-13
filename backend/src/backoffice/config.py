@@ -26,6 +26,17 @@ class Settings(BaseSettings):
     # Switch tracing off (the tests do this, so test runs don't fill Langfuse with fake traces).
     tracing_enabled: bool = True
 
+    # The backend API (step 15): which website addresses may call it from a browser (CORS).
+    # Default: the frontend's local dev server (Vite, step 16). In .env, a comma-separated list:
+    #   CORS_ORIGINS=http://localhost:5173,https://overlook-demo.example
+    cors_origins: str = "http://localhost:5173"
+
+    # Spending protection for the public demo (step 18): every run calls Claude and Voyage, which cost
+    # money. Before a run starts, the API counts the runs already started (the `runs` table) and refuses
+    # with 429 above these limits. Change them in .env / the host's settings without touching code.
+    run_limit_per_visitor: int = 30     # one visitor, last 2 hours (3 whole inboxes)
+    run_limit_per_hour: int = 150       # all visitors together, last hour
+
     model_config = SettingsConfigDict(
         # Looked up relative to where the command runs: works from the repo root and from backend/.
         env_file=(".env", "../.env"),

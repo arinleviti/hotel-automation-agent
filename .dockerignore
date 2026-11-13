@@ -1,0 +1,25 @@
+# What Docker does NOT copy into the image (smaller, faster builds, and no secrets).
+
+# Secrets: never in the image. Cloud Run gets the keys as environment variables instead.
+.env
+.env.*
+!.env.example
+
+# Installed or built locally: the image installs and builds its own.
+**/node_modules
+frontend/dist
+backend/.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+
+# Not needed to run the demo.
+.git
+.claude
+.vscode
+backend/tests
+backend/evals
+# (Only these Markdown files: the prompts in backend/src/backoffice/prompts/*.md ARE needed.)
+README.md
+CLAUDE.md
+frontend/README.md

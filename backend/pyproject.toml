@@ -9,11 +9,16 @@ requires-python = ">=3.12"
 dependencies = [
     "anthropic>=2.7.0",
     "docling>=2.149.0",
+    "fastapi>=0.162.5",
     "langfuse>=5.2.0",
     "langgraph>=1.2.20",
     "langgraph-checkpoint-postgres>=3.2.0",
     "psycopg[binary]>=3.3.8",
     "pydantic-settings>=2.16.2",
+    # Already installed through Docling; listed here only so the CPU-only source below applies to them.
+    "torch>=2.15.0",
+    "torchvision>=0.29.2",
+    "uvicorn>=0.54.0",
     "voyageai>=0.6.0",
 ]
 
@@ -28,3 +33,16 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.2.0",
 ]
+
+# PyTorch (used by Docling's layout models) from PyTorch's own CPU-only store, not PyPI (step 18).
+# PyPI's Linux build includes ~3 GB of Nvidia GPU libraries; Cloud Run has no GPU, so the CPU build
+# (~200 MB) keeps the Docker image small. Docling works the same: it runs on the processor anyway.
+# explicit = true: this store is used ONLY for the packages listed here, everything else stays on PyPI.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

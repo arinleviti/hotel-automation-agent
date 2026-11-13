@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- The browser-tab icon: the hexagon of the page's carpet strip (our own drawing), in the 70s palette:
+       179 C red outline, 1605 C orange centre, no background tile. -->
+  <path d="M9 3.5h14l7 12.5-7 12.5H9L2 16z" fill="#efe3c8" stroke="#e03c31" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M12.5 10h7l3.5 6-3.5 6h-7L9 16z" fill="#a65523"/>
+</svg>

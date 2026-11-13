@@ -1,0 +1,62 @@
+/* Page-wide basics: the 70s palette (Arin's Pantone card), the fonts, no default margins.
+ *
+ * Colours (approximate screen values of the Pantone swatches):
+ *   cream paper  #EFE3C8   page background
+ *   179 C red    #E03C31   buttons, the selected email, ✗
+ *   174 C brown  #963821   titles, brand, borders
+ *   1605 C orange #A65523  "waiting", ⚠
+ *   346 C green  #5DBB7E   "approved", ✓, the Claude tag
+ *   488 C salmon #E8A898   soft highlights
+ *   ink          #3B2418   text (a dark brown instead of black)
+ *
+ * Fonts (Google Fonts, loaded in index.html):
+ *   --typewriter  Courier Prime: emails, drafts, node names (the typewriter of the film's era)
+ *   --typed       Special Elite: email subjects (a worn, inky typewriter)
+ *   --display     Fraunces, "soft" style: titles (the rounded Cooper-Black feel of 70s signs)
+ *   --sans        Jost: buttons and labels (a Futura-like geometric sans)
+ */
+
+:root {
+  --bg: #efe3c8;
+  --panel: #f8f0dd;
+  --ink: #3b2418;
+  --muted: #7a5a44;
+  --line: #d9c49c;
+  --accent: #e03c31;        /* 179 C */
+  --accent-soft: #f6d3c8;
+  --brown: #963821;         /* 174 C */
+  --ok: #2f7d4b;            /* 346 C, darkened for text contrast */
+  --ok-fill: #5dbb7e;       /* 346 C */
+  --ok-soft: #d9ecd6;
+  --warn: #a65523;          /* 1605 C */
+  --warn-soft: #f3dcc3;
+  --bad: #c8322a;
+  --bad-soft: #f6d0c8;
+  --salmon: #e8a898;        /* 488 C */
+
+  --typewriter: "Courier Prime", "Courier New", monospace;
+  --typed: "Special Elite", "Courier Prime", monospace;
+  --display: "Fraunces", Georgia, serif;
+  --sans: "Jost", "Futura", "Century Gothic", sans-serif;
+  --mono: var(--typewriter);
+
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}

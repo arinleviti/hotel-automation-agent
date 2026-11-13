@@ -288,11 +288,28 @@ def run_until_pause_or_end(graph: CompiledStateGraph, graph_input: Any, thread_i
         snapshot.values      the whole state so far, e.g. {"email_path": ..., "email": ..., "outgoing_draft": ...}
         snapshot.interrupts  the waiting interrupts, e.g. (Interrupt(value={...request...}),); () if none
     """
+    nodes_run = [step for step, _added in iter_steps(graph, graph_input, thread_id)]
+    return run_result(graph, thread_id, nodes_run)
+
+
+def iter_steps(graph: CompiledStateGraph, graph_input: Any, thread_id: str):
+    """
+    The same run, ONE STEP AT A TIME, as each node finishes (step 15: the API streams these to the
+    browser). A generator: `yield` (plain Python) hands back one value and pauses here until the
+    caller asks for the next, so the caller sees each step while the run is still going.
+
+    Yields (step name, what the node added), e.g. for #3:
+        ("read_email", {"email": ParsedEmail(...)})
+        ("classify", {"classification": Classification(type="booking", ...)})
+        ("booking_branch > price_stay", {"stay_price": StayPrice(... total_price=Decimal("1440.72"))})
+        ...
+    Used by run_until_pause_or_end (which only keeps the names) and by the API (which turns each
+    step into a line of text for the UI's middle column).
+    """
     config = run_config(thread_id)
-    nodes_run: list[str] = []
     subgraphs_seen: set[str] = set()          # boxes whose inner steps we already listed
     for namespace, update in graph.stream(graph_input, config, stream_mode="updates", subgraphs=True):
-        for name in update:
+        for name, added in update.items():
             if name == "__interrupt__":
                 continue
             # Step 13: LangGraph gives the error handler an internal name such as
@@ -303,12 +320,15 @@ def run_until_pause_or_end(graph: CompiledStateGraph, graph_input: Any, thread_i
                 # Inside a subgraph: "booking_branch:4f2c..." -> "booking_branch"
                 box = namespace[0].split(":")[0]
                 subgraphs_seen.add(box)
-                nodes_run.append(f"{box} > {name}")
+                yield f"{box} > {name}", added or {}
             elif name not in subgraphs_seen:
-                nodes_run.append(name)
+                yield name, added or {}
             # else: the subgraph reported as a whole, after its inner steps: already listed
 
-    snapshot = graph.get_state(config)
+
+def run_result(graph: CompiledStateGraph, thread_id: str, nodes_run: list[str]) -> RunResult:
+    """Where the run stands now, read from its latest checkpoint (see run_until_pause_or_end)."""
+    snapshot = graph.get_state(run_config(thread_id))
     waiting = snapshot.interrupts[0].value if snapshot.interrupts else None
     return RunResult(thread_id=thread_id, state=snapshot.values, nodes_run=nodes_run, waiting_for_human=waiting)
 

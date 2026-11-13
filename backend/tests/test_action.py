@@ -7,13 +7,16 @@
 """
 
 import uuid
+from datetime import timedelta
 from types import SimpleNamespace
+from unittest.mock import ANY      # ANY: equal to anything (here: the started_at time)
 
 import pytest
 
 import backoffice.graph.nodes.classify as classify_module
 from backoffice.db.connection import connect
-from backoffice.db.queries import save_action
+from backoffice.db.queries import (count_recent_runs, delete_old_runs, load_actions, load_latest_runs, load_run_visitor, save_action,
+                                   save_run)
 from backoffice.graph.branches.human_review import FRONT_DESK
 from backoffice.graph.main_graph import build_graph, process_email, resume_email
 from backoffice.graph.nodes.action import final_message
@@ -124,3 +127,56 @@ def test_save_action_twice_for_the_same_run_keeps_one_row(conn):
     assert (first, second) == (True, False)                      # the second insert is skipped
     count = conn.execute("SELECT count(*) FROM actions WHERE thread_id = %s", (thread_id,)).fetchone()[0]
     assert count == 1
+
+
+# --- Runs per visitor and the 2-hour cleanup (step 16.2), on the real Postgres tables -----------------
+
+def test_each_visitor_gets_only_their_own_runs_and_decisions(conn):
+    alice, bob = f"alice-{uuid.uuid4()}", f"bob-{uuid.uuid4()}"
+    alice_run, bob_run = str(uuid.uuid4()), str(uuid.uuid4())
+    save_run(conn, alice_run, "09_suspicious_hidden_instruction", alice)
+    save_run(conn, bob_run, "10_other_cancellation", bob)
+    save_action(conn, alice_run, "09_suspicious_hidden_instruction", Decision.APPROVE, DRAFT)
+
+    assert load_latest_runs(conn, alice) == {
+        "09_suspicious_hidden_instruction": {"thread_id": alice_run, "started_at": ANY, "decision": "approve"}}
+    assert load_latest_runs(conn, bob) == {
+        "10_other_cancellation": {"thread_id": bob_run, "started_at": ANY, "decision": None}}
+    assert [row["thread_id"] for row in load_actions(conn, alice)] == [alice_run]
+    assert load_actions(conn, bob) == []
+    assert load_run_visitor(conn, alice_run) == alice
+    assert load_run_visitor(conn, "no-such-run") is None
+
+
+def test_runs_older_than_two_hours_are_deleted_with_their_decisions(conn):
+    visitor = f"visitor-{uuid.uuid4()}"
+    old_run, new_run = str(uuid.uuid4()), str(uuid.uuid4())
+    save_run(conn, old_run, "09_suspicious_hidden_instruction", visitor)
+    save_run(conn, new_run, "10_other_cancellation", visitor)
+    save_action(conn, old_run, "09_suspicious_hidden_instruction", Decision.APPROVE, DRAFT)
+    # Make the first run (and its decision) look 3 hours old.
+    conn.execute("UPDATE runs SET started_at = now() - interval '3 hours' WHERE thread_id = %s", (old_run,))
+    conn.execute("UPDATE actions SET decided_at = now() - interval '3 hours' WHERE thread_id = %s", (old_run,))
+
+    deleted = delete_old_runs(conn, timedelta(hours=2))
+
+    assert old_run in deleted and new_run not in deleted
+    assert load_run_visitor(conn, old_run) is None
+    assert load_actions(conn, visitor) == []
+    assert list(load_latest_runs(conn, visitor)) == ["10_other_cancellation"]
+
+
+def test_recent_runs_are_counted_per_visitor_and_for_everyone(conn):
+    visitor = f"visitor-{uuid.uuid4()}"
+    before_mine, before_all = count_recent_runs(conn, visitor)
+    save_run(conn, str(uuid.uuid4()), "10_other_cancellation", visitor)
+    save_run(conn, str(uuid.uuid4()), "09_suspicious_hidden_instruction", visitor)
+    save_run(conn, str(uuid.uuid4()), "10_other_cancellation", f"other-{uuid.uuid4()}")
+    old = str(uuid.uuid4())
+    save_run(conn, old, "10_other_cancellation", visitor)
+    conn.execute("UPDATE runs SET started_at = now() - interval '3 hours' WHERE thread_id = %s", (old,))
+
+    mine, everyone = count_recent_runs(conn, visitor)
+
+    assert mine - before_mine == 2              # the 3-hour-old run is not counted
+    assert everyone - before_all == 3
