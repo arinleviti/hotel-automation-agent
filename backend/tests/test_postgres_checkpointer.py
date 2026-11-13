@@ -77,3 +77,22 @@ def test_an_unknown_thread_id_is_refused():
     # In memory: no database needed to check the refusal.
     with pytest.raises(ValueError):
         resume_email("no-such-run", {"decision": "approve"}, build_graph())
+
+
+def test_a_connection_closed_by_the_database_is_replaced(postgres_available, fake_claude, fake_actions_table):
+    # Step 18: Neon (serverless) closes idle connections. Reproduced here: the database itself
+    # kills the pool's connection (pg_terminate_backend), then a run saves its checkpoints. With one
+    # fixed connection this failed with "OperationalError: the connection is closed"; the pool
+    # notices the dead connection (check_connection) and opens a new one.
+    from backoffice.db.connection import connect
+
+    with postgres_checkpointer() as checkpointer:
+        with checkpointer.conn.connection() as pooled:          # .conn = the pool; borrow its connection
+            pid = pooled.info.backend_pid                       # Postgres's id for that connection
+        with connect() as admin:
+            admin.execute("SELECT pg_terminate_backend(%s)", (pid,))   # the database closes it
+
+        result = process_email("09_suspicious_hidden_instruction", build_graph(checkpointer))
+
+        assert result.waiting_for_human is not None             # the run saved its checkpoints fine
+        checkpointer.delete_thread(result.thread_id)

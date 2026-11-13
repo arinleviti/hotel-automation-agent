@@ -45,8 +45,8 @@ from collections.abc import Iterator                         # the return type o
 from contextlib import contextmanager                        # turns a function into a `with` block
 
 # psycopg (the Postgres driver):
-import psycopg                                               # psycopg.connect(...): open a connection
 from psycopg.rows import dict_row                            # make rows come back as dicts (LangGraph needs it)
+from psycopg_pool import ConnectionPool                      # a few connections, replaced when one dies (step 18)
 
 # LangGraph:
 from langgraph.checkpoint.memory import InMemorySaver               # checkpointer in a Python dict
@@ -115,12 +115,21 @@ def memory_checkpointer() -> InMemorySaver:
 @contextmanager
 def postgres_checkpointer() -> Iterator[PostgresSaver]:
     """
-    A checkpointer that saves every run's state in Postgres, over ONE open connection, closed when
-    the `with` block ends.
+    A checkpointer that saves every run's state in Postgres, through a small CONNECTION POOL that
+    is closed when the `with` block ends.
 
-    The connection settings are the ones LangGraph's PostgresSaver requires (they are what its own
-    PostgresSaver.from_conn_string uses); we open the connection ourselves only to add our
-    serializer and the 5-second timeout:
+    Why a pool and not one connection (step 18): the live demo's database is Neon, which is
+    serverless: after ~5 minutes without queries it suspends itself and CLOSES open connections.
+    With one connection opened at server start, every run after a quiet spell failed with
+    "OperationalError: the connection is closed". A ConnectionPool (psycopg_pool) hands out
+    connections and, with check=ConnectionPool.check_connection, tests each one before handing it
+    out; a dead one is thrown away and a new one opened, so the app never sees it.
+      min_size=1, max_size=4   between 1 and 4 open connections (runs at the same time share them)
+      max_idle=120             a connection unused for 2 minutes is closed by the pool itself
+    LangGraph's PostgresSaver accepts a pool in place of a connection.
+
+    The connection settings (kwargs) are the ones LangGraph's PostgresSaver requires (they are
+    what its own PostgresSaver.from_conn_string uses), plus our 5-second timeout:
       autocommit=True      every statement is saved immediately (no transaction to commit): each
                            checkpoint is on disk as soon as the node finishes
       row_factory=dict_row rows come back as dicts {"column": value}; LangGraph's code reads them
@@ -129,9 +138,19 @@ def postgres_checkpointer() -> Iterator[PostgresSaver]:
                            recommends turning off for its checkpoint queries
       connect_timeout=5    give up after 5 s if the database isn't running (same as db/connection.py)
     """
-    with psycopg.connect(get_settings().database_url, autocommit=True, row_factory=dict_row,
-                         prepare_threshold=0, connect_timeout=5) as conn:
-        yield PostgresSaver(conn, serde=state_serializer())
+    pool = ConnectionPool(
+        conninfo=get_settings().database_url,
+        min_size=1,
+        max_size=4,
+        max_idle=120,
+        check=ConnectionPool.check_connection,
+        kwargs={"autocommit": True, "row_factory": dict_row, "prepare_threshold": 0, "connect_timeout": 5},
+        open=False,                    # opened just below, inside the `with`
+    )
+    # pool.open(wait=True, timeout=10): connect now (and fail fast if the database is unreachable).
+    with pool:
+        pool.open(wait=True, timeout=10)
+        yield PostgresSaver(pool, serde=state_serializer())
 
 
 def setup_checkpoint_tables() -> None:

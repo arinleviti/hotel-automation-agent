@@ -397,9 +397,10 @@ export default function App() {
                   <StepLog steps={run.steps} state={run.state} error={run.error} />
                 </section>
               )}
-              {run && run.state === "running" && run.steps.length === 0 && (
+              {/* No line yet: still starting, or it failed before the first step (show why). */}
+              {run && (run.state === "running" || run.state === "error") && run.steps.length === 0 && (
                 <section className="agent-steps">
-                  <StepLog steps={[]} state="running" />
+                  <StepLog steps={[]} state={run.state} error={run.error} />
                 </section>
               )}
               {run?.reopened && (
